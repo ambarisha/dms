@@ -88,8 +88,6 @@ static pid_t	 pgrp;		/*        our process group */
 static long	 w_secs;	/*    -w: retry delay */
 static int	 family = PF_UNSPEC;	/* -[46]: address family to use */
 
-static int	 sigalrm;	/* SIGALRM received */
-static int	 siginfo;	/* SIGINFO received */
 static int	 sigint;	/* SIGINT received */
 
 static long	 ftp_timeout = TIMEOUT;	/* default timeout for FTP transfers */
@@ -296,7 +294,7 @@ fetch(char *URL, const char *path)
 	if (s_flag != 0) dmreq.flags |= s_FLAG;
 	if (o_stdout != 0) dmreq.flags |= O_STDOUT;
 
-	return (dm_request(dmreq));
+	return (dmget(dmreq));
 }
 
 static void

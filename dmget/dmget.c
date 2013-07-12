@@ -18,8 +18,8 @@ int		 dmDebug;
 int		 dmLastErrCode;
 char		 dmLastErrString[MAXERRSTRING];
 
-static int dms;
 static int sigint;
+static int siginfo;
 
 static void *
 Malloc(size_t size)
@@ -31,11 +31,22 @@ Malloc(size_t size)
 	return ptr;
 }
 
+void dm_sighandler(int signal)
+{
+	switch(signal) {
+	case SIGINT:
+		sigint = 1;
+		break;
+	case SIGINFO:
+		siginfo = 1;
+		break;
+	}
+}
+
 static int
 mk_reqbuf(struct dmreq dmreq, char **reqbuf, char op)
 {
 	int bufsize = 0;
-	printf("mk_reqbuf() : Starting\n");
 
 	bufsize += sizeof(bufsize); 				// Buffer size
 	bufsize += 1; 						// Opcode
@@ -91,57 +102,83 @@ mk_reqbuf(struct dmreq dmreq, char **reqbuf, char op)
 }
 
 static int
+sigsafe_write(int sock, char *buf, int bufsize)
+{
+	int err;
+	sigset_t sm;
+	sigemptyset(&sm);
+	sigaddset(&sm, SIGINT);
+	sigaddset(&sm, SIGINFO);
+
+	sigprocmask(SIG_BLOCK, &sm, NULL);
+	err = Write(sock, buf, bufsize);
+	sigprocmask(SIG_UNBLOCK, &sm, NULL);
+
+	return err;
+}
+
+
+static int
+sigsafe_read(int sock, char *buf, int bufsize)
+{
+	int ret, n = 0;
+
+	/* If the first read was an error return 
+	 * because that could be because of a signal
+	 * */
+	ret = read(sock, buf, bufsize);
+	if (ret == -1) 
+		return (-1);
+
+	/* But if we've already started reading, we keep reading */
+	while ((ret == -1 && errno == EINTR) || n > 0 && n < bufsize) {
+		ret = read(sock, buf + n, bufsize - n);	
+		if (ret != -1)
+			n += ret;
+	}
+	
+	if (ret == -1)
+		return (-1);
+	else
+		return n;
+}
+
+static int
 send_request(int sock, struct dmreq dmreq)
 {
 	char *reqbuf;
 	int bufsize = mk_reqbuf(dmreq, &reqbuf, DMREQ);
-	int err = Write(sock, reqbuf, bufsize);
+	int err;
 
+	err = sigsafe_write(sock, reqbuf, bufsize);
+	
 	free(reqbuf);
 	return (err);
 }
 
 static int
-keep_reading(int sock, char *buf, int size)
+recv_msg(int sock, struct msg *msg)
 {
-	int err = read(sock, buf, size);
-	while (err == -1 && errno == EINTR && sigint == 0) {
-		err = read(sock, buf, size);
-	}
+	int err;
+	fd_set fds;
+	sigset_t sm;
 
+	FD_ZERO(&fds);
+	FD_SET(sock, &fds);
+	
+	err = Select(sock + 1, &fds, NULL, NULL, NULL);
 	if (err == -1)
-		perror("read():");
+		return -1;
+
+	sigemptyset(&sm);
+	sigaddset(&sm, SIGINT);
+	sigaddset(&sm, SIGINFO);
+
+	sigprocmask(SIG_BLOCK, &sm, NULL);
+	err = Peel(sock, msg);
+	sigprocmask(SIG_UNBLOCK, &sm, NULL);
 
 	return err;
-}
-
-static int
-recv_response(int sock, struct dmres *dmres)
-{
-	int bufsize;
-	keep_reading(sock, &bufsize, sizeof(bufsize));
-	bufsize -= sizeof(bufsize);
-
-	char *buf = (char *) Malloc(bufsize);
-	keep_reading(sock, buf, bufsize);
-
-	/* TODO: Check the error code in the response and set the 
-		 dmLastErrCode & dmLastErrString values */
-}
-
-int
-dm_request(struct dmreq dmreq)
-{
-	dms = socket(AF_UNIX, SOCK_STREAM, 0);
-	struct sockaddr_un dms_addr;
-	dms_addr.sun_family = AF_UNIX;
-	strncpy(dms_addr.sun_path, DMS_UDS_PATH, sizeof(dms_addr.sun_path));
-	int err = Connect(dms, (struct sockaddr *) &dms_addr, sizeof(dms_addr));
-	
-	send_request(dms, dmreq);
-
-	struct dmres dmres;
-	recv_response(dms, &dmres);	
 }
 
 static int
@@ -169,17 +206,58 @@ send_msg(int socket, struct msg msg)
 	return (nbytes);
 }
 
-void
-dm_sighandler(int signal)
+static int
+send_signal(int sock)
 {
 	struct msg msg;
 	msg.op = DMSIG;
 	msg.buf = &signal;
 	msg.len = sizeof(signal);
-	send_msg(dms, msg);
+	return (send_msg(sock, msg));
+}
 
-	if (signal == SIGINT) {
-		close(dms);
-		exit(2);
+int
+dmget(struct dmreq dmreq)
+{
+	int sock, err;
+	struct sockaddr_un dms_addr;
+
+	sock = Socket(AF_UNIX, SOCK_STREAM, 0);
+
+	dms_addr.sun_family = AF_UNIX;
+	strncpy(dms_addr.sun_path, DMS_UDS_PATH, sizeof(dms_addr.sun_path));
+	err = Connect(sock, (struct sockaddr *) &dms_addr, sizeof(dms_addr));
+
+	if (siginfo || sigint) 
+		goto signal;
+
+	send_request(sock, dmreq);
+
+	while (!sigint) {
+		struct msg msg;
+		err = recv_msg(sock, &msg);				
+		if (err == 0)
+			goto done;
+
+		if (sigint || siginfo) {
+			send_signal(sock);
+			goto signal;
+		}
+		
+		switch(msg.op) {
+		case DMRESP:
+		case DMAUTHREQ:
+		case DMSTATRESP:
+		default:
+			break;
+		}
 	}
+
+signal:
+	return (1);	
+failure:
+done:
+	/* Set dmLastErrCode dmLastErrString */
+	close(sock);
+	return (0);
 }

@@ -119,17 +119,27 @@ int
 Peel(int sock, struct msg *msg)
 {
 	int bufsize = 0;
-	Read(sock, &bufsize, sizeof(bufsize));
+	int err;
+	err = Read(sock, &bufsize, sizeof(bufsize));
+	if (err == 0)
+		return (err);
 	bufsize -= sizeof(bufsize);
 	
-	Read(sock, &(msg->op), sizeof(msg->op));
+	err = Read(sock, &(msg->op), sizeof(msg->op));
+	if (err == 0)
+		return (err);
 	bufsize -= sizeof(msg->op);
 
 	msg->buf = (char *) Malloc(bufsize);
 	msg->len = bufsize;
 
 	Read(sock, msg->buf, bufsize);
-	return 0;
+	if (err == 0) {
+		free(msg->buf);
+		msg->len = 0;
+	}
+
+	return bufsize;
 }
 
 int
