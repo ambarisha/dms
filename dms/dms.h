@@ -46,7 +46,7 @@ struct dmrep {
 	char 	*errstr;
 };
 
-#define DEBUG			0
+#define DEBUG			1
 
 #define MAX_LISTEN_QUEUE	5
 #define MINBUFSIZE		4096

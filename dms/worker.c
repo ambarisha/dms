@@ -14,7 +14,6 @@ static int	sigalrm;	/* SIGALRM received by client */
 static int 	siginfo;	/* SIGINFO received by client */
 static int 	sigint;		/* SIGINT received by client */
 static int	handle_siginfo;	/* Yes or No */
-static int	parent;
 
 static void
 stat_start(struct xferstat *xs, const char *name, off_t size, off_t offset)
@@ -56,33 +55,6 @@ stat_update(struct xferstat *xs, off_t rcvd)
 	if (v_tty && v_level > 0)
 		stat_display(xs, 0);
 	*/
-}
-
-static void
-sig_handler(int sigusr1)
-{
-	int sig;
-	struct dmmsg msg;
-	Peel(parent, &msg);
-
-	// Assert msg.op == DMSIG
-	
-	sig = *(int *) &(msg.buf);
-	
-	switch(sig) {
-	case SIGINFO:
-		if (handle_siginfo == 1)
-			siginfo = 1;
-		break;
-	case SIGINT:
-		sigint = 1;
-		break;
-	default:
-		/* unregistered signal received */
-		break;
-	}		
-
-	free(msg.buf);
 }
 
 static void
@@ -538,54 +510,18 @@ fetch(struct dmjob dmjob, char *buf)
 	return (r);
 }
 
-static void
-send_report(int parent, struct dmrep report, char op)
+int
+do_job(struct dmjob dmjob, struct dmrep *report)
 {
-	char *buf;
-	int bufsize = sizeof(report) - sizeof(report.errstr);
-	int errlen = strlen(report.errstr);
-	bufsize +=  errlen;	
-
-	buf = (char *) Malloc(bufsize);
-	int i = 0;
-	
-	memcpy(buf + i, &(report.status), sizeof(report.status));
-	i += sizeof(report.status);
-
-	memcpy(buf + i, &(report.errcode), sizeof(report.errcode));
-	i += sizeof(report.errcode);
-
-	strcpy(buf + i, report.errstr);
-	i += errlen;
-	
-	struct dmmsg msg;
-	msg.op = op;
-	msg.buf = buf;
-	msg.len = bufsize;
-	send_msg(parent, msg);
-	
-	free(buf);
-}
-
-void
-run_worker(struct dmjob dmjob, int psock)
-{
-	parent = psock;
 	/* allocate buffer */
 	char *buf;
 	if (dmjob.B_size < MINBUFSIZE)
 		dmjob.B_size = MINBUFSIZE;
 	buf = (char *) Malloc(dmjob.B_size);
 
-	/* Register sig_handler SIGUSR1 */
-	handle_siginfo = 0;
-	signal(SIGUSR1, sig_handler);
-	signal(SIGALRM, alrm_handler);
-
 	int err = fetch(dmjob, buf);
-	struct dmrep report;
-	report.status = err;
-	report.errcode = fetchLastErrCode;
-	report.errstr = fetchLastErrString;	
-	send_report(parent, report, DMRESP);
+	report->status = err;
+	report->errcode = fetchLastErrCode;
+	report->errstr = fetchLastErrString;	
+	return err;
 }

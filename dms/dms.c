@@ -14,7 +14,7 @@
 #include "list.h"
 #include "dms.h"
 
-static int	 sigint;
+int	 stop;
 
 static struct dmjob *
 mk_dmjob(int sock, struct dmreq dmreq)
@@ -27,6 +27,7 @@ mk_dmjob(int sock, struct dmreq dmreq)
 	dmjob->ftp_timeout = dmreq.ftp_timeout;
 	dmjob->http_timeout = dmreq.http_timeout;
 	dmjob->B_size = dmreq.B_size;
+
 	dmjob->S_size = dmreq.S_size;
 	dmjob->T_secs = dmreq.T_secs;
 	dmjob->flags = dmreq.flags;
@@ -54,7 +55,7 @@ Mk_dmjob(int sock, struct dmreq dmreq)
 		printf("mk_dmjob(): Success\n");
 #endif
 	}
-	return err;
+	return dmjob;
 }
 
 static void
@@ -140,12 +141,42 @@ Free_request(struct dmreq **dmreq)
 	*dmreq = NULL;
 }
 
+static void
+send_report(int sock, struct dmrep report, char op)
+{
+	char *buf;
+	int bufsize = sizeof(report) - sizeof(report.errstr);
+	int errlen = strlen(report.errstr);
+	bufsize +=  errlen;	
+
+	buf = (char *) Malloc(bufsize);
+	int i = 0;
+	
+	memcpy(buf + i, &(report.status), sizeof(report.status));
+	i += sizeof(report.status);
+
+	memcpy(buf + i, &(report.errcode), sizeof(report.errcode));
+	i += sizeof(report.errcode);
+
+	strcpy(buf + i, report.errstr);
+	i += errlen;
+	
+	struct dmmsg msg;
+	msg.op = op;
+	msg.buf = buf;
+	msg.len = bufsize;
+	send_msg(sock, msg);
+	
+	free(buf);
+}
+
 static int
 handle_request(int csock, struct conn **conns)
 {
 	struct dmjob *dmjob;
 	struct dmreq *dmreq;
 	struct dmmsg msg;
+	struct dmrep report;
 	int err;
 	pid_t pid;
 
@@ -156,38 +187,8 @@ handle_request(int csock, struct conn **conns)
  		dmreq = Parse_request(msg.buf, msg.len);
 		dmjob = Mk_dmjob(csock, *dmreq);
 		Free_request(&dmreq);
-
-		int sockets[2];
-		Socketpair(AF_LOCAL, SOCK_STREAM, 0, sockets);
-
-		pid = fork();
-		if (pid == 0) {
-			/* Close all unwanted fds */
-			struct conn *cur = *conns;
-			while (cur != NULL) {
-				close(cur->client);
-				close(cur->worker);
-				*conns = rm_conn(*conns, cur);
-				cur = *conns;
-			}
-
-			close(csock);
-			close(sockets[0]);
-
-			/* Enter sandbox mode */
-			// if(cap_enter() < 0) 
-			//	errx(2, "Worker: Couldn't enter sandbox mode");
-			/* Can't do this till libfetch is modified */
-
-			run_worker(*dmjob, sockets[1]);
-			rm_dmjob(&dmjob);
-			exit(0);
-		} else {
-			//close(sockets[1]);
-			*conns = add_conn(*conns, csock, sockets[0]);
-			rm_dmjob(&dmjob);
-		}
-
+		do_job(*dmjob, &report);
+		send_report(csock, report, DMRESP);
 		default:
 			/* Unknown opcode recieved */
 			return -1;
@@ -200,7 +201,7 @@ handle_request(int csock, struct conn **conns)
 void
 sigint_handler(int sig)
 {
-	sigint = 1;
+	stop = 1;
 	exit(1); // Temporary
 }
 
@@ -275,10 +276,9 @@ run_event_loop(int socket)
 
 	fd_set fdset;
 
-	sigint = 0;
 	signal(SIGINT, sigint_handler);
 
-	while (!sigint) {
+	while (!stop) {
 
 		/* Prepare fdset and make select call */
 		FD_ZERO(&fdset);

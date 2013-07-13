@@ -139,6 +139,10 @@ Peel(int sock, struct dmmsg *msg)
 		msg->len = 0;
 	}
 
+#if DEBUG
+	printf("{ msg->op = %d; msg->len = %d }\n", msg->op, msg->len);
+#endif
+
 	return bufsize;
 }
 
