@@ -18,8 +18,11 @@ int		 dmDebug;
 int		 dmLastErrCode;
 char		 dmLastErrString[MAXERRSTRING];
 
-static int sigint;
-static int siginfo;
+static int 	 sigint;
+static int 	 siginfo;
+
+static int 	 dmg_error;
+static char	*dmg_errstr;
 
 static void *
 Malloc(size_t size)
@@ -44,9 +47,57 @@ void dm_sighandler(int signal)
 }
 
 static int
+sigsafe_write(int sock, char *buf, int bufsize)
+{
+	int ret;
+	sigset_t sm;
+	sigemptyset(&sm);
+	sigaddset(&sm, SIGINT);
+	sigaddset(&sm, SIGINFO);
+
+	sigprocmask(SIG_BLOCK, &sm, NULL);
+	ret = Write(sock, buf, bufsize);
+	sigprocmask(SIG_UNBLOCK, &sm, NULL);
+
+	return ret;
+}
+
+static int
+sigsafe_read(int sock, char *buf, int bufsize)
+{
+	int ret, n = 0;
+
+	/* If the first read was an error return 
+	 * because that could be because of a signal
+	 * */
+	ret = Read(sock, buf, bufsize);
+	if (ret == -1 || ret == 0) 
+		return ret;
+		
+	/* But if we've already started reading, we keep reading */
+	while ((ret == -1 && errno == EINTR) || n > 0 && n < bufsize) {
+		ret = read(sock, buf + n, bufsize - n);	
+		if (ret == 0) {
+			/* Read ended prematurely
+			 * Set dmg_error appropriately and return
+			 */
+
+			break;
+		}
+		
+		if (ret != -1)
+			n += ret;
+	}
+
+	if (ret != -1)
+		return(n);
+	return(ret);
+}
+
+static int
 mk_reqbuf(struct dmreq dmreq, char **reqbuf, char op)
 {
-	int bufsize = 0;
+	int bufsize = 0, i = 0;
 
 	bufsize += sizeof(bufsize); 				// Buffer size
 	bufsize += 1; 						// Opcode
@@ -57,9 +108,7 @@ mk_reqbuf(struct dmreq dmreq, char **reqbuf, char op)
 
 	*reqbuf = (char *) Malloc(bufsize);
 	
-	int i = 0;
-	
-	memcpy(*reqbuf, &(bufsize), sizeof(bufsize));
+	memcpy(*reqbuf, &bufsize, sizeof(bufsize));
 	i += sizeof(bufsize);
 	
 	*(*reqbuf+i) = op;
@@ -98,128 +147,16 @@ mk_reqbuf(struct dmreq dmreq, char **reqbuf, char op)
 	strcpy(*reqbuf + i, dmreq.path);
 	i += strlen(dmreq.path) + 1;
 	
-	return bufsize;
+	return(i);
 }
 
-static int
-sigsafe_write(int sock, char *buf, int bufsize)
-{
-	int err;
-	sigset_t sm;
-	sigemptyset(&sm);
-	sigaddset(&sm, SIGINT);
-	sigaddset(&sm, SIGINFO);
-
-	sigprocmask(SIG_BLOCK, &sm, NULL);
-	err = Write(sock, buf, bufsize);
-	sigprocmask(SIG_UNBLOCK, &sm, NULL);
-
-	return err;
-}
-
-
-static int
-sigsafe_read(int sock, char *buf, int bufsize)
-{
-	int ret, n = 0;
-
-	/* If the first read was an error return 
-	 * because that could be because of a signal
-	 * */
-	ret = read(sock, buf, bufsize);
-	if (ret == -1) 
-		return (-1);
-
-	/* But if we've already started reading, we keep reading */
-	while ((ret == -1 && errno == EINTR) || n > 0 && n < bufsize) {
-		ret = read(sock, buf + n, bufsize - n);	
-		if (ret != -1)
-			n += ret;
-	}
-	
-	if (ret == -1)
-		return (-1);
-	else
-		return n;
-}
-
-static int
-send_request(int sock, struct dmreq dmreq)
-{
-	char *reqbuf;
-	int bufsize = mk_reqbuf(dmreq, &reqbuf, DMREQ);
-	int err;
-
-	err = sigsafe_write(sock, reqbuf, bufsize);
-	
-	free(reqbuf);
-	return (err);
-}
-
-static int
-recv_msg(int sock, struct msg *msg)
-{
-	int err;
-	fd_set fds;
-	sigset_t sm;
-
-	FD_ZERO(&fds);
-	FD_SET(sock, &fds);
-	
-	err = Select(sock + 1, &fds, NULL, NULL, NULL);
-	if (err == -1)
-		return -1;
-
-	sigemptyset(&sm);
-	sigaddset(&sm, SIGINT);
-	sigaddset(&sm, SIGINFO);
-
-	sigprocmask(SIG_BLOCK, &sm, NULL);
-	err = Peel(sock, msg);
-	sigprocmask(SIG_UNBLOCK, &sm, NULL);
-
-	return err;
-}
-
-static int
-send_msg(int socket, struct msg msg)
-{
-	int bufsize = sizeof(bufsize);	// Buffer size
-	bufsize += 1; 			// Op
-	bufsize += msg.len;		// Signal number
-
-	char *sndbuf = (char *) Malloc(bufsize);
-	
-	int i = 0;
-	memcpy(sndbuf + i, &bufsize, sizeof(bufsize));	
-	i += sizeof(bufsize);
-
-	*(sndbuf + i) = msg.op;
-	i++;
-
-	memcpy(sndbuf + i, msg.buf, msg.len);
-	i += msg.len;
-
-	int nbytes = Write(socket, sndbuf, bufsize);
-	free(sndbuf);
-
-	return (nbytes);
-}
-
-static int
-send_signal(int sock)
-{
-	struct msg msg;
-	msg.op = DMSIG;
-	msg.buf = &signal;
-	msg.len = sizeof(signal);
-	return (send_msg(sock, msg));
-}
-
-static void
-mk_dmres(char *buf, int buflen, struct dmres *dmres)
+static struct dmres *
+mk_dmres(char *buf, int buflen)
 {
 	int i = 0, len;
+	struct dmres *dmres;
+
+	dmres = (struct dmres*) Malloc(sizeof(struct dmres));
 	
 	memcpy(dmres->status, buf + i, sizeof(dmres->status));
 	i += sizeof(dmres->status);
@@ -230,6 +167,81 @@ mk_dmres(char *buf, int buflen, struct dmres *dmres)
 	len = strlen(dmres->errstr);
 	dmres->errstr = (char *) Malloc(len);
 	strcpy(dmres->errstr, buf + i);
+
+	return dmres;
+}
+
+static void
+rm_dmres(struct dmres **dmres)
+{
+	free((*dmres)->errstr);
+	free(*dmres);
+	*dmres = NULL;
+}
+
+static int
+send_signal(int sock)
+{
+	struct dmmsg msg;
+	msg.op = DMSIG;
+	msg.buf = &signal;
+	msg.len = sizeof(signal);
+	return (send_msg(sock, msg));
+}
+
+static int
+send_request(int sock, struct dmreq dmreq)
+{
+	char *reqbuf;
+	int bufsize, err;
+
+	bufsize = mk_reqbuf(dmreq, &reqbuf, DMREQ);
+	err = sigsafe_write(sock, reqbuf, bufsize);
+	
+	free(reqbuf);
+	return(err);
+}
+
+static void
+free_msg(struct dmmsg **msg)
+{
+	free((*msg)->buf);
+	free(*msg);
+	*msg = NULL;
+}
+
+static struct dmmsg *
+recv_msg(int sock)
+{
+	int err;
+	fd_set fds;
+	sigset_t sm;
+	struct dmmsg *msg;
+
+	msg = (struct dmmsg *) Malloc(sizeof(struct dmmsg));
+
+	FD_ZERO(&fds);
+	FD_SET(sock, &fds);
+	
+	err = Select(sock + 1, &fds, NULL, NULL, NULL);
+	if (err == -1)
+		return(-1);
+
+	sigemptyset(&sm);
+	sigaddset(&sm, SIGINT);
+	sigaddset(&sm, SIGINFO);
+
+	sigprocmask(SIG_BLOCK, &sm, NULL);
+	err = Peel(sock, msg);
+	sigprocmask(SIG_UNBLOCK, &sm, NULL);
+
+	if (err != 0) {
+		/* Set dmg_err* */
+		free_msg(&msg);
+		return NULL;
+	}
+	
+	return msg;
 }
 
 int
@@ -237,7 +249,7 @@ dmget(struct dmreq dmreq)
 {
 	int sock, err, ret;
 	struct sockaddr_un dms_addr;
-	struct dmres dmres;
+	struct dmres *dmres;
 
 	sock = Socket(AF_UNIX, SOCK_STREAM, 0);
 
@@ -251,8 +263,8 @@ dmget(struct dmreq dmreq)
 	send_request(sock, dmreq);
 
 	while (!sigint) {
-		struct msg msg;
-		err = recv_msg(sock, &msg);				
+		struct dmmsg *msg;
+		msg = recv_msg(sock);				
 		if (err == 0)
 			goto failure;
 
@@ -261,19 +273,19 @@ dmget(struct dmreq dmreq)
 			goto signal;
 		}
 		
-		switch(msg.op) {
+		switch(msg->op) {
 		case DMRESP:
-			mk_dmres(msg.buf, msg.len, &dmres);
-			free(msg.buf);
-			msg.len = 0;
+			dmres = mk_dmres(msg->buf, msg->len);
+			free_msg(&msg);
 			if (dmres->status == 0){
 				/* set dmLastErr* */
+				rm_dmres(&dmres);
 				goto success;
 			} else {
+				rm_dmres(&dmres);
 				goto failure;
 			}
 		case DMAUTHREQ:
-		case DMSTATRESP:
 		default:
 			break;
 		}

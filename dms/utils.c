@@ -3,7 +3,6 @@
 #include <errno.h>
 
 #include "dm.h"
-#include "dms.h"
 
 void *
 Malloc(size_t size)
@@ -22,13 +21,12 @@ Read(int fd, void *buf, size_t size)
 	ssize_t err = read(fd, buf, size);
 	if (err == -1) {
 		perror("Read(): ");
-#if DEBUG
 	} else if (err != size) {
-		printf("Warning: %d bytes received %d expected\n", err, size);
+		printf("Warning: %d bytes received %d expected", err, size);
 	} else {
 		printf("Read() : Success\n");
-#endif
 	} 
+
 	return err;
 }
 
@@ -38,10 +36,8 @@ Socket(int domain, int type, int flags)
 	int err = socket(domain, type, flags);
 	if (err == -1) {
 		perror("Socket():");
-#if DEBUG
 	} else {
 		printf("Socket(): Success\n");
-#endif
 	}
 
 	return err;
@@ -53,10 +49,8 @@ Write(int fd, void *buf, size_t size)
 	int err = write(fd, buf, size);
 	if (err == -1) {
 		perror("Write():");
-#if DEBUG
 	} else {
 		printf("Write(): Success\n");
-#endif
 	}
 	return err;
 }
@@ -67,10 +61,8 @@ Socketpair(int domain, int type, int protocol, int socket_vector[2])
 	int err = socketpair(domain, type, protocol, socket_vector);	
 	if (err == -1) {
 		perror("Socketpair():");
-#if DEBUG
 	} else {
 		printf("Socketpair() : Success\n");
-#endif
 	}
 	return err;
 }
@@ -81,10 +73,8 @@ Bind(int socket, const struct sockaddr *addr, socklen_t addrlen)
 	int err = bind(socket, addr, addrlen);
 	if (err == -1) {
 		perror("Bind():");
-#if DEBUG
 	} else {
 		printf("Bind() : Success\n");
-#endif
 	}
 	return err;
 }
@@ -95,10 +85,20 @@ Accept(int socket, struct sockaddr *addr, socklen_t *addrlen)
 	int err = accept(socket, addr, addrlen);
 	if (err == -1) {
 		perror("Accept():");
-#if DEBUG
 	} else {
 		printf("Accept() : Success\n");
-#endif
+	}
+	return err;
+}
+
+int
+Connect(int socket, struct sockaddr *addr, socklen_t addrlen)
+{
+	int err = connect(socket, addr, addrlen);
+	if (err == -1) {
+		perror("Connect():");
+	} else {
+		printf("Connect() : Success\n");
 	}
 	return err;
 }
@@ -109,29 +109,37 @@ Listen(int socket, int backlog)
 	int err = listen(socket, backlog);
 	if (err == -1) {
 		perror("Listen():");
-#if DEBUG
 	} else {
 		printf("Listen() : Success\n");
-#endif
 	}
 	return err;
 }
 
 int
-Peel(int sock, struct msg *msg)
+Peel(int sock, struct dmmsg *msg)
 {
 	int bufsize = 0;
-	Read(sock, &bufsize, sizeof(bufsize));
+	int err;
+	err = Read(sock, &bufsize, sizeof(bufsize));
+	if (err == 0)
+		return (err);
 	bufsize -= sizeof(bufsize);
 	
-	Read(sock, &(msg->op), sizeof(msg->op));
+	err = Read(sock, &(msg->op), sizeof(msg->op));
+	if (err == 0)
+		return (err);
 	bufsize -= sizeof(msg->op);
 
 	msg->buf = (char *) Malloc(bufsize);
 	msg->len = bufsize;
 
 	Read(sock, msg->buf, bufsize);
-	return 0;
+	if (err == 0) {
+		free(msg->buf);
+		msg->len = 0;
+	}
+
+	return bufsize;
 }
 
 int
@@ -141,33 +149,34 @@ Select(int maxfd, fd_set *rset, fd_set *wset, fd_set *xset,
 	int err = select(maxfd, rset, wset, xset, timeout);
 	if (err == -1) {
 		perror("Select():");
-#if DEBUG
 	} else {
 		printf("Select(): Success\n");
-#endif
 	}
 	return err;
 }
 
 int
-send_msg(int socket, struct msg msg)
+send_msg(int socket, struct dmmsg msg)
 {
-	int i = 0, bufsize;
-	bufsize = msg.len + sizeof(msg.op) + sizeof(msg.len);
+	int bufsize = sizeof(bufsize);	// Buffer size
+	bufsize += 1; 			// Op
+	bufsize += msg.len;		// Signal number
+
 	char *sndbuf = (char *) Malloc(bufsize);
 	
-	memcpy(sndbuf + i, &bufsize, sizeof(bufsize));
+	int i = 0;
+	memcpy(sndbuf + i, &bufsize, sizeof(bufsize));	
 	i += sizeof(bufsize);
-	
-	memcpy(sndbuf + i, &(msg.op), sizeof(msg.op));
-	i += sizeof(msg.op);
-	
+
+	*(sndbuf + i) = msg.op;
+	i++;
+
 	memcpy(sndbuf + i, msg.buf, msg.len);
 	i += msg.len;
 
-	// Assert i == bufsize;
-	
-	return Write(socket, sndbuf, bufsize);
-}
+	int nbytes = Write(socket, sndbuf, bufsize);
+	free(sndbuf);
 
+	return (nbytes);
+}
 

@@ -116,7 +116,7 @@ handle_request(int csock, struct conn **conns)
 {
 	struct dmjob dmjob;
 	struct dmreq dmreq;
-	struct msg msg;
+	struct dmmsg msg;
 	int err;
 	pid_t pid;
 
@@ -175,7 +175,7 @@ sigint_handler(int sig)
 static int
 handle_client_msg(struct conn *conn)
 {
-	struct msg msg;
+	struct dmmsg msg;
 	int ret = Peel(conn->client, &msg);
 	if (ret == 0)
 		 return(1);
@@ -184,7 +184,6 @@ handle_client_msg(struct conn *conn)
 	case DMSIG:
 		send_msg(conn->worker, msg);
 		break;
-	case DMSTATREQ:
 	case DMAUTHRESP:
 		/* TODO: Implement these */
 		break;
@@ -198,7 +197,7 @@ handle_client_msg(struct conn *conn)
 static int
 handle_worker_msg(struct conn *conn)
 {
-	struct msg msg;
+	struct dmmsg msg;
 
 	int ret = Peel(conn->worker, &msg);
 	if (ret == 0) /* Worker closed the socket !! */
@@ -209,7 +208,6 @@ handle_worker_msg(struct conn *conn)
 		send_msg(conn->client, msg);
 		ret = 1;
 		break;
-	case DMSTATRESP:
 	case DMAUTHREQ:	
 		/* TODO: Implement these */
 		break;

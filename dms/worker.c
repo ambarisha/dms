@@ -62,7 +62,7 @@ static void
 sig_handler(int sigusr1)
 {
 	int sig;
-	struct msg msg;
+	struct dmmsg msg;
 	Peel(parent, &msg);
 
 	// Assert msg.op == DMSIG
@@ -558,7 +558,7 @@ send_report(int parent, struct dmrep report, char op)
 	strcpy(buf + i, report.errstr);
 	i += errlen;
 	
-	struct msg msg;
+	struct dmmsg msg;
 	msg.op = op;
 	msg.buf = buf;
 	msg.len = bufsize;

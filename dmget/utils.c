@@ -116,7 +116,7 @@ Listen(int socket, int backlog)
 }
 
 int
-Peel(int sock, struct msg *msg)
+Peel(int sock, struct dmmsg *msg)
 {
 	int bufsize = 0;
 	int err;
@@ -154,3 +154,29 @@ Select(int maxfd, fd_set *rset, fd_set *wset, fd_set *xset,
 	}
 	return err;
 }
+
+int
+send_msg(int socket, struct dmmsg msg)
+{
+	int bufsize = sizeof(bufsize);	// Buffer size
+	bufsize += 1; 			// Op
+	bufsize += msg.len;		// Signal number
+
+	char *sndbuf = (char *) Malloc(bufsize);
+	
+	int i = 0;
+	memcpy(sndbuf + i, &bufsize, sizeof(bufsize));	
+	i += sizeof(bufsize);
+
+	*(sndbuf + i) = msg.op;
+	i++;
+
+	memcpy(sndbuf + i, msg.buf, msg.len);
+	i += msg.len;
+
+	int nbytes = Write(socket, sndbuf, bufsize);
+	free(sndbuf);
+
+	return (nbytes);
+}
+

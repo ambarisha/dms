@@ -12,8 +12,8 @@
 
 struct dmres {
 	int	 status;
-	int	 dmLastErrCode;
-	char	*dmLastErrString;
+	int	 errcode;
+	char	*errstr;
 };
 
 struct dmreq {
