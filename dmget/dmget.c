@@ -216,11 +216,28 @@ send_signal(int sock)
 	return (send_msg(sock, msg));
 }
 
+static void
+mk_dmres(char *buf, int buflen, struct dmres *dmres)
+{
+	int i = 0, len;
+	
+	memcpy(dmres->status, buf + i, sizeof(dmres->status));
+	i += sizeof(dmres->status);
+
+	memcpy(dmres->errcode, buf + i, sizeof(dmres->errcode));
+	i += sizeof(dmres->errcode);
+	
+	len = strlen(dmres->errstr);
+	dmres->errstr = (char *) Malloc(len);
+	strcpy(dmres->errstr, buf + i);
+}
+
 int
 dmget(struct dmreq dmreq)
 {
-	int sock, err;
+	int sock, err, ret;
 	struct sockaddr_un dms_addr;
+	struct dmres dmres;
 
 	sock = Socket(AF_UNIX, SOCK_STREAM, 0);
 
@@ -237,7 +254,7 @@ dmget(struct dmreq dmreq)
 		struct msg msg;
 		err = recv_msg(sock, &msg);				
 		if (err == 0)
-			goto done;
+			goto failure;
 
 		if (sigint || siginfo) {
 			send_signal(sock);
@@ -246,6 +263,15 @@ dmget(struct dmreq dmreq)
 		
 		switch(msg.op) {
 		case DMRESP:
+			mk_dmres(msg.buf, msg.len, &dmres);
+			free(msg.buf);
+			msg.len = 0;
+			if (dmres->status == 0){
+				/* set dmLastErr* */
+				goto success;
+			} else {
+				goto failure;
+			}
 		case DMAUTHREQ:
 		case DMSTATRESP:
 		default:
@@ -254,10 +280,16 @@ dmget(struct dmreq dmreq)
 	}
 
 signal:
-	return (1);	
+	ret = -1;
+	goto done;
 failure:
+	ret = 1;
+	goto done;
+success:
+	ret = 0;
+	goto done;
 done:
 	/* Set dmLastErrCode dmLastErrString */
 	close(sock);
-	return (0);
+	return (ret);
 }

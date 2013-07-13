@@ -11,6 +11,9 @@
 #define DMS_UDS_PATH	"/tmp/dms.uds"
 
 struct dmres {
+	int	 status;
+	int	 dmLastErrCode;
+	char	*dmLastErrString;
 };
 
 struct dmreq {
@@ -42,7 +45,7 @@ struct dmreq {
 	char	*path;
 };
 
-struct msg {
+struct dmmsg {
 	char 	 op;
 	int 	 len;
 	char 	*buf;
@@ -50,10 +53,8 @@ struct msg {
 
 #define		DMREQ			1
 #define		DMRESP			2
-#define		DMSTATREQ		3
-#define		DMSTATRESP		4
-#define		DMAUTHREQ		5
-#define		DMAUTHRESP		6
-#define		DMSIG			7
+#define		DMAUTHREQ		3
+#define		DMAUTHRESP		4
+#define		DMSIG			5
 
 #endif /* _DMCLIENT_H */
