@@ -14,13 +14,13 @@
 #include "list.h"
 #include "dms.h"
 
-#define	MAX_ALIVE_CONNECTIONS	256
+static int	 sigint;
 
-static int	sigint;
-
-static int
-mk_dmjob(int sock, struct dmreq dmreq, struct dmjob *dmjob)
+static struct dmjob *
+mk_dmjob(int sock, struct dmreq dmreq)
 {
+	struct dmjob *dmjob = (struct dmjob *) Malloc(sizeof(struct dmjob));
+
 	/* Right now dmjob and dmreq are same */
 	dmjob->v_level = dmreq.v_level;
 	dmjob->family = dmreq.family;
@@ -30,17 +30,24 @@ mk_dmjob(int sock, struct dmreq dmreq, struct dmjob *dmjob)
 	dmjob->S_size = dmreq.S_size;
 	dmjob->T_secs = dmreq.T_secs;
 	dmjob->flags = dmreq.flags;
-	dmjob->i_filename = dmreq.i_filename;
-	dmjob->URL = dmreq.URL;
-	dmjob->path = dmreq.path;
-	return 0;
+
+	dmjob->i_filename = (char *) Malloc(strlen(dmreq.i_filename) + 1);
+	strcpy(dmjob->i_filename, dmreq.i_filename);
+
+	dmjob->URL = (char *) Malloc(strlen(dmreq.URL) + 1);
+	strcpy(dmjob->URL, dmreq.URL);
+
+	dmjob->path = (char *) Malloc(strlen(dmreq.path) + 1);
+	strcpy(dmjob->path, dmreq.path);
+
+	return dmjob;
 }
 
-static int
-Mk_dmjob(int sock, struct dmreq dmreq, struct dmjob *dmjob)
+static struct dmjob *
+Mk_dmjob(int sock, struct dmreq dmreq)
 {
-	int err = mk_dmjob(sock, dmreq, dmjob);
-	if (err == -1) {
+	struct dmjob *dmjob = mk_dmjob(sock, dmreq);
+	if (dmjob == NULL) {
 		perror("mk_dmjob():");
 #if DEBUG
 	} else {
@@ -50,10 +57,22 @@ Mk_dmjob(int sock, struct dmreq dmreq, struct dmjob *dmjob)
 	return err;
 }
 
+static void
+rm_dmjob(struct dmjob **dmjob)
+{
+	free((*dmjob)->i_filename);
+	free((*dmjob)->path);
+	free((*dmjob)->URL);
+	free(*dmjob);
+	*dmjob = NULL;
+}
+
 static int
-parse_request(char *rcvbuf, int bufsize, struct dmreq *dmreq)
+parse_request(char *rcvbuf, int bufsize)
 {
 	int i = 0;
+
+	struct dmreq *dmreq = (struct dmreq *) Malloc(sizeof(struct dmreq));
 
 	memcpy(&(dmreq->v_level), rcvbuf + i, sizeof(dmreq->v_level));
 	i += sizeof(dmreq->v_level);
@@ -94,28 +113,38 @@ parse_request(char *rcvbuf, int bufsize, struct dmreq *dmreq)
 	strcpy(dmreq->path, rcvbuf+i);
 	i += sz + 1;
 	
-	return (0);
+	return dmreq;
 }
 
 static int
-Parse_request(char *rcvbuf, int bufsize, struct dmreq *dmreq)
+Parse_request(char *rcvbuf, int bufsize)
 {
-	int err = parse_request(rcvbuf, bufsize, dmreq);
-	if (err == -1) {
+	struct dmreq *dmreq = parse_request(rcvbuf, bufsize);
+	if (dmreq == NULL) {
 		perror("Parse_request():");
 #if DEBUG
 	} else {
 		printf("Parse_reqeust(): Success\n");
 #endif
 	}
-	return err;
+	return dmreq;
+}
+
+static void
+Free_request(struct dmreq **dmreq)
+{
+	free((*dmreq)->i_filename);
+	free((*dmreq)->URL);
+	free((*dmreq)->path);
+	free(*dmreq);
+	*dmreq = NULL;
 }
 
 static int
 handle_request(int csock, struct conn **conns)
 {
-	struct dmjob dmjob;
-	struct dmreq dmreq;
+	struct dmjob *dmjob;
+	struct dmreq *dmreq;
 	struct dmmsg msg;
 	int err;
 	pid_t pid;
@@ -124,8 +153,9 @@ handle_request(int csock, struct conn **conns)
 	
 	switch (msg.op) {
 	case DMREQ:
- 		err = Parse_request(msg.buf, msg.len, &dmreq);
-		err = Mk_dmjob(csock, dmreq, &dmjob);
+ 		dmreq = Parse_request(msg.buf, msg.len);
+		dmjob = Mk_dmjob(csock, *dmreq);
+		Free_request(&dmreq);
 
 		int sockets[2];
 		Socketpair(AF_LOCAL, SOCK_STREAM, 0, sockets);
@@ -149,11 +179,13 @@ handle_request(int csock, struct conn **conns)
 			//	errx(2, "Worker: Couldn't enter sandbox mode");
 			/* Can't do this till libfetch is modified */
 
-			run_worker(dmjob, sockets[1]);
+			run_worker(*dmjob, sockets[1]);
+			rm_dmjob(&dmjob);
 			exit(0);
 		} else {
 			//close(sockets[1]);
 			*conns = add_conn(*conns, csock, sockets[0]);
+			rm_dmjob(&dmjob);
 		}
 
 		default:
@@ -280,6 +312,7 @@ run_event_loop(int socket)
 			if (ret == 1) {
 				close(cur->client);
 				close(cur->worker);
+				/* What should happen to the worker */
 				conns = rm_conn(conns, cur);
 			}
 			cur = cur->next;
