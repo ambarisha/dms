@@ -122,12 +122,12 @@ Peel(int sock, struct dmmsg *msg)
 	int err;
 	err = Read(sock, &bufsize, sizeof(bufsize));
 	if (err == 0)
-		return (err);
+		return (-1);
 	bufsize -= sizeof(bufsize);
 	
 	err = Read(sock, &(msg->op), sizeof(msg->op));
 	if (err == 0)
-		return (err);
+		return (-1);
 	bufsize -= sizeof(msg->op);
 
 	msg->buf = (char *) Malloc(bufsize);
@@ -137,9 +137,10 @@ Peel(int sock, struct dmmsg *msg)
 	if (err == 0) {
 		free(msg->buf);
 		msg->len = 0;
+		return (-1);
 	}
 
-	return bufsize;
+	return 1;
 }
 
 int

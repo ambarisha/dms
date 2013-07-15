@@ -89,6 +89,12 @@ mk_dmjob(int sock, struct dmreq dmreq)
 	dmjob->T_secs = dmreq.T_secs;
 	dmjob->flags = dmreq.flags;
 
+	if (dmjob->flags & V_TTY)
+		printf("v_tty is set :)\n");
+	else 	
+		printf("v_tty is already gone\n");
+	printf("HELLO???\n");
+
 	dmjob->i_filename = (char *) Malloc(strlen(dmreq.i_filename) + 1);
 	strcpy(dmjob->i_filename, dmreq.i_filename);
 
@@ -99,6 +105,7 @@ mk_dmjob(int sock, struct dmreq dmreq)
 	strcpy(dmjob->path, dmreq.path);
 
 	dmjob->fd = Read_fd(sock);
+	dmjob->csock = sock;
 
 	return dmjob;
 }
@@ -140,24 +147,35 @@ parse_request(char *rcvbuf, int bufsize)
 	memcpy(&(dmreq->family), rcvbuf + i, sizeof(dmreq->family));
 	i += sizeof(dmreq->family);
 
-	memcpy(&(dmreq->ftp_timeout), rcvbuf, sizeof(dmreq->ftp_timeout));
+	memcpy(&(dmreq->ftp_timeout), rcvbuf + i, sizeof(dmreq->ftp_timeout));
 	i += sizeof(dmreq->ftp_timeout);
 	
-	memcpy(&(dmreq->http_timeout), rcvbuf, sizeof(dmreq->http_timeout));
+	memcpy(&(dmreq->http_timeout), rcvbuf + i, sizeof(dmreq->http_timeout));
 	i += sizeof(dmreq->http_timeout);
 	
-	memcpy(&(dmreq->B_size), rcvbuf, sizeof(dmreq->B_size));
+	memcpy(&(dmreq->B_size), rcvbuf + i, sizeof(dmreq->B_size));
 	i += sizeof(dmreq->B_size);
 	
-	memcpy(&(dmreq->S_size), rcvbuf, sizeof(dmreq->S_size));
+	memcpy(&(dmreq->S_size), rcvbuf + i, sizeof(dmreq->S_size));
 	i += sizeof(dmreq->S_size);
 	
-	memcpy(&(dmreq->T_secs), rcvbuf, sizeof(dmreq->T_secs));
+	memcpy(&(dmreq->T_secs), rcvbuf + i, sizeof(dmreq->T_secs));
 	i += sizeof(dmreq->T_secs);
 	
-	memcpy(&(dmreq->flags), rcvbuf, sizeof(dmreq->flags));
+	memcpy(&(dmreq->flags), rcvbuf + i, sizeof(dmreq->flags));
+
+	printf("flags = %d\n", *(int *)(rcvbuf + i));
 	i += sizeof(dmreq->flags);
-	
+	printf("i after flags == %d\n honey", i);
+
+	if (dmreq->flags & V_TTY)
+		printf("v_tty is STTIIIIIILLL set :)\n");
+	else 	
+		printf("v_tty is already gone\n");
+	printf("RARRRR\n");
+
+	write(1, rcvbuf, bufsize);
+
 	int sz = strlen(rcvbuf+i);
 	dmreq->i_filename = (char *) Malloc(sz);
 	strcpy(dmreq->i_filename, rcvbuf+i);

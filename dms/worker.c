@@ -16,9 +16,61 @@ static int 	sigint;		/* SIGINT received by client */
 static int	handle_siginfo;	/* Yes or No */
 
 static void
-stat_start(struct xferstat *xs, const char *name, off_t size, off_t offset)
+stat_send(int csock, struct xferstat *xs, int force)
 {
-	/*snprintf(xs->name, sizeof xs->name, "%s", name);
+	char *buf = (char *) Malloc(sizeof(struct xferstat) + sizeof(force));
+	*((int *) buf) = force;
+	
+	memcpy(buf + sizeof(force), xs, sizeof(struct xferstat));
+
+	struct dmmsg msg;
+	msg.op = DMSTAT;
+	msg.buf = buf; 
+	msg.len = sizeof(*xs) + sizeof(force);
+	send_msg(csock, msg);
+
+	free(msg.buf);
+	return;
+}
+
+static const char *prefixes = " kMGTP";
+static const char *
+stat_bytes(off_t bytes)
+{
+	static char str[16];
+	const char *prefix = prefixes;
+
+	while (bytes > 9999 && prefix[1] != '\0') {
+		bytes /= 1024;
+		prefix++;
+	}
+	snprintf(str, sizeof str, "%4jd %cB", (intmax_t)bytes, *prefix);
+	return (str);
+}
+
+static const char *
+stat_bps(struct xferstat *xs)
+{
+	static char str[16];
+	double delta, bps;
+
+	delta = (xs->last.tv_sec + (xs->last.tv_usec / 1.e6))
+	    - (xs->last2.tv_sec + (xs->last2.tv_usec / 1.e6));
+
+	if (delta == 0.0) {
+		snprintf(str, sizeof str, "?? Bps");
+	} else {
+		bps = (xs->rcvd - xs->lastrcvd) / delta;
+		snprintf(str, sizeof str, "%sps", stat_bytes((off_t)bps));
+	}
+	return (str);
+}
+
+static void
+stat_start(struct xferstat *xs, const char *name, off_t size,
+	off_t offset, struct dmjob dmjob)
+{
+	snprintf(xs->name, sizeof xs->name, "%s", name);
 	gettimeofday(&xs->start, NULL);
 	xs->last.tv_sec = xs->last.tv_usec = 0;
 	xs->size = size;
@@ -26,35 +78,30 @@ stat_start(struct xferstat *xs, const char *name, off_t size, off_t offset)
 	xs->rcvd = offset;
 	xs->lastrcvd = offset;
 	if ((dmjob.flags & V_TTY) && dmjob.v_level > 0)
-		stat_display(xs, 1);
-	else if (v_level > 0)
+		stat_send(dmjob.csock, xs, 1);
+	else if (dmjob.v_level > 0)
 		fprintf(stderr, "%-46s", xs->name);
-	*/
 }
 
 static void
-stat_end(struct xferstat *xs)
+stat_end(struct xferstat *xs, struct dmjob dmjob)
 {
-	/*
 	gettimeofday(&xs->last, NULL);
-	if (v_tty && v_level > 0) {
-		stat_display(xs, 2);
+	if ((dmjob.flags & V_TTY) && dmjob.v_level > 0) {
+		stat_send(dmjob.csock, xs, 2);
 		putc('\n', stderr);
-	} else if (v_level > 0) {
+	} else if (dmjob.v_level > 0) {
 		fprintf(stderr, "        %s %s\n",
 		    stat_bytes(xs->size), stat_bps(xs));
 	}
-	*/
 }
 
 static void
-stat_update(struct xferstat *xs, off_t rcvd)
+stat_update(struct xferstat *xs, off_t rcvd, struct dmjob dmjob)
 {
-	/*
 	xs->rcvd = rcvd;
-	if (v_tty && v_level > 0)
-		stat_display(xs, 0);
-	*/
+	if ((dmjob.flags & V_TTY) && dmjob.v_level > 0)
+		stat_send(dmjob.csock, xs, 0);
 }
 
 static void
@@ -159,8 +206,8 @@ fetch(struct dmjob dmjob, char *buf)
 
 	/* just print size */
 	if (dmjob.flags & s_FLAG) {
-		if (timeout)
-			alarm(timeout);
+	//	if (timeout)
+	//			alarm(timeout);
 		r = fetchStat(url, &us, flags);
 		if (timeout)
 			alarm(0);
@@ -298,7 +345,6 @@ fetch(struct dmjob dmjob, char *buf)
 				goto failure;
 			}
 			/* we got it, open local file */
-			printf("fdopening %d\n", dmjob.fd);
 			if ((of = fdopen(dmjob.fd, "r+")) == NULL) {
 				warn("%s: fdopen()", dmjob.path);
 				goto failure;
@@ -383,7 +429,7 @@ fetch(struct dmjob dmjob, char *buf)
 	count = url->offset;
 
 	/* start the counter */
-	stat_start(&xs, dmjob.path, us.size, count);
+	stat_start(&xs, dmjob.path, us.size, count, dmjob);
 
 	sigalrm = siginfo = sigint = 0;
 
@@ -396,7 +442,7 @@ fetch(struct dmjob dmjob, char *buf)
 		else
 			size = dmjob.B_size;
 		if (siginfo) {
-			stat_end(&xs);
+			stat_end(&xs, dmjob);
 			siginfo = 0;
 		}
 
@@ -410,7 +456,7 @@ fetch(struct dmjob dmjob, char *buf)
 				break;
 		}
 
-		stat_update(&xs, count += readcnt);
+		stat_update(&xs, count += readcnt, dmjob);
 		for (ptr = buf; readcnt > 0; ptr += wr, readcnt -= wr)
 			if ((wr = fwrite(ptr, 1, readcnt, of)) < readcnt) {
 				if (ferror(of) && errno == EINTR && !sigint)
@@ -425,7 +471,7 @@ fetch(struct dmjob dmjob, char *buf)
 		sigalrm = ferror(f) && errno == ETIMEDOUT;
 	handle_siginfo = 0;
 
-	stat_end(&xs);
+	stat_end(&xs, dmjob);
 
 	/*
 	 * If the transfer timed out or was interrupted, we still want to

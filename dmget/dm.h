@@ -39,6 +39,7 @@ struct dmreq {
 #define		p_FLAG		(1 << 10)
 #define		r_FLAG		(1 << 11)
 #define		s_FLAG		(1 << 12)
+#define		V_TTY		(1 << 13)
 
 	char	*i_filename;
 	char	*URL;
@@ -51,10 +52,22 @@ struct dmmsg {
 	char 	*buf;
 };
 
+struct xferstat {
+	char		 name[64];
+	struct timeval	 start;		/* start of transfer */
+	struct timeval	 last;		/* time of last update */
+	struct timeval	 last2;		/* time of previous last update */
+	off_t		 size;		/* size of file per HTTP hdr */
+	off_t		 offset;	/* starting offset in file */
+	off_t		 rcvd;		/* bytes already received */
+	off_t		 lastrcvd;	/* bytes received since last update */
+};
+
 #define		DMREQ			1
 #define		DMRESP			2
 #define		DMAUTHREQ		3
 #define		DMAUTHRESP		4
 #define		DMSIG			5
+#define		DMSTAT			6
 
 #endif /* _DMCLIENT_H */

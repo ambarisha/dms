@@ -14,6 +14,7 @@
 #include "dmget.h"
 
 auth_t		 dmAuthMethod;
+stat_display_t	 dmStatDisplayMethod;
 int		 dmTimeout;
 int		 dmRestartCalls;
 int		 dmDebug;
@@ -159,14 +160,14 @@ mk_dmres(char *buf, int buflen)
 	struct dmres *dmres;
 
 	dmres = (struct dmres*) Malloc(sizeof(struct dmres));
-	
-	memcpy(dmres->status, buf + i, sizeof(dmres->status));
+
+	memcpy(&(dmres->status), buf + i, sizeof(dmres->status));
 	i += sizeof(dmres->status);
 
-	memcpy(dmres->errcode, buf + i, sizeof(dmres->errcode));
+	memcpy(&(dmres->errcode), buf + i, sizeof(dmres->errcode));
 	i += sizeof(dmres->errcode);
-	
-	len = strlen(dmres->errstr);
+
+	len = strlen(buf + i);
 	dmres->errstr = (char *) Malloc(len);
 	strcpy(dmres->errstr, buf + i);
 
@@ -287,7 +288,7 @@ recv_msg(int sock)
 	err = Peel(sock, msg);
 	sigprocmask(SIG_UNBLOCK, &sm, NULL);
 
-	if (err != 0) {
+	if (err == -1) {
 		/* Set dmg_err* */
 		free_msg(&msg);
 		return NULL;
@@ -299,9 +300,10 @@ recv_msg(int sock)
 int
 dmget(struct dmreq dmreq)
 {
-	int sock, err, ret;
+	int sock, err, ret, force;
 	struct sockaddr_un dms_addr;
 	struct dmres *dmres;
+	struct xferstat xs;
 
 	sock = Socket(AF_UNIX, SOCK_STREAM, 0);
 
@@ -317,8 +319,9 @@ dmget(struct dmreq dmreq)
 	while (!sigint) {
 		struct dmmsg *msg;
 		msg = recv_msg(sock);				
-		if (err == 0)
+		if (msg == NULL) {
 			goto failure;
+		}
 
 		if (sigint || siginfo) {
 			send_signal(sock);
@@ -337,6 +340,12 @@ dmget(struct dmreq dmreq)
 				rm_dmres(&dmres);
 				goto failure;
 			}
+		case DMSTAT:
+			force = *((int *)(msg->buf));
+			memcpy(&xs, (msg->buf) + sizeof(force), sizeof(xs));
+			free_msg(&msg);
+			dmStatDisplayMethod(&xs, force);
+			break;
 		case DMAUTHREQ:
 		default:
 			break;

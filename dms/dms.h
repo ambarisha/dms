@@ -1,16 +1,5 @@
 #include <sys/types.h>
 
-struct xferstat {
-	char		 name[64];
-	struct timeval	 start;		/* start of transfer */
-	struct timeval	 last;		/* time of last update */
-	struct timeval	 last2;		/* time of previous last update */
-	off_t		 size;		/* size of file per HTTP hdr */
-	off_t		 offset;	/* starting offset in file */
-	off_t		 rcvd;		/* bytes already received */
-	off_t		 lastrcvd;	/* bytes received since last update */
-};
-
 struct dmjob {
 	int	 v_level;
 	int	 family;
@@ -21,6 +10,7 @@ struct dmjob {
 	long	 T_secs;
 	long	 flags;
 	int	 fd;
+	int	 csock;
 
 #define		A_FLAG		(1 << 0)
 #define		F_FLAG		(1 << 1)

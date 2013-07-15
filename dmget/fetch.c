@@ -94,20 +94,6 @@ static long	 ftp_timeout = TIMEOUT;	/* default timeout for FTP transfers */
 static long	 http_timeout = TIMEOUT;/* default timeout for HTTP transfers */
 static char	*buf;		/* transfer buffer */
 
-struct xferstat {
-	char		 name[64];
-	struct timeval	 start;		/* start of transfer */
-	struct timeval	 last;		/* time of last update */
-	struct timeval	 last2;		/* time of previous last update */
-	off_t		 size;		/* size of file per HTTP hdr */
-	off_t		 offset;	/* starting offset in file */
-	off_t		 rcvd;		/* bytes already received */
-	off_t		 lastrcvd;	/* bytes received since last update */
-};
-
-/*
- * Signal handler
- */
 /*
  * Compute and display ETA
  */
@@ -272,7 +258,6 @@ fetch(char *URL, const char *path)
 	dmreq.B_size = B_size;
 	dmreq.S_size = S_size;
 	dmreq.URL = URL;
-	printf("URL = %s\n", dmreq.URL);
 	dmreq.path = path;
 	dmreq.T_secs = T_secs;
 
@@ -280,20 +265,26 @@ fetch(char *URL, const char *path)
 	else dmreq.i_filename = "";
 
 	dmreq.flags = 0;
-	if (A_flag != 0) dmreq.flags |= A_FLAG;
-	if (F_flag != 0) dmreq.flags |= F_FLAG;
-	if (R_flag != 0) dmreq.flags |= R_FLAG;
-	if (U_flag != 0) dmreq.flags |= U_FLAG;
-	if (d_flag != 0) dmreq.flags |= d_FLAG;
-	if (i_flag != 0) dmreq.flags |= i_FLAG;
-	if (l_flag != 0) dmreq.flags |= l_FLAG;
-	if (m_flag != 0) dmreq.flags |= m_FLAG;
-	if (n_flag != 0) dmreq.flags |= n_FLAG;
-	if (p_flag != 0) dmreq.flags |= p_FLAG;
-	if (r_flag != 0) dmreq.flags |= r_FLAG;
-	if (s_flag != 0) dmreq.flags |= s_FLAG;
-	if (o_stdout != 0) dmreq.flags |= O_STDOUT;
+	if (A_flag) dmreq.flags |= A_FLAG;
+	if (F_flag) dmreq.flags |= F_FLAG;
+	if (R_flag) dmreq.flags |= R_FLAG;
+	if (U_flag) dmreq.flags |= U_FLAG;
+	if (d_flag) dmreq.flags |= d_FLAG;
+	if (i_flag) dmreq.flags |= i_FLAG;
+	if (l_flag) dmreq.flags |= l_FLAG;
+	if (m_flag) dmreq.flags |= m_FLAG;
+	if (n_flag) dmreq.flags |= n_FLAG;
+	if (p_flag) dmreq.flags |= p_FLAG;
+	if (r_flag) dmreq.flags |= r_FLAG;
+	if (s_flag) dmreq.flags |= s_FLAG;
+	if (o_stdout) dmreq.flags |= O_STDOUT;
+	if (v_tty) dmreq.flags |= V_TTY;
+	
 
+	if (dmreq.flags & V_TTY) printf("v_tty is set\n");
+	else printf("v_tty is not set\n");
+
+	dmStatDisplayMethod = stat_display;
 	return (dmget(dmreq));
 }
 
