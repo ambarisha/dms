@@ -20,6 +20,7 @@ struct dmjob {
 	off_t	 S_size;
 	long	 T_secs;
 	long	 flags;
+	int	 fd;
 
 #define		A_FLAG		(1 << 0)
 #define		F_FLAG		(1 << 1)

@@ -16,6 +16,63 @@
 
 int	 stop;
 
+static int
+read_fd(int sock)
+{
+	struct msghdr msg;
+	struct iovec iov[1];
+	ssize_t n;
+	char c;
+	int newfd;
+
+	union {
+		struct cmsghdr cm;
+		char control[CMSG_SPACE(sizeof(int))];
+	} control_un;
+	struct cmsghdr *cmptr;
+
+	msg.msg_control = control_un.control;
+	msg.msg_controllen = sizeof(control_un.control);
+
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+
+	iov[0].iov_base = &c;
+	iov[0].iov_len = sizeof(c);
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 1;
+
+	if ( (n = recvmsg(sock, &msg, 0)) <= 0)
+		return (n);
+
+	if ( (cmptr = CMSG_FIRSTHDR(&msg)) != NULL &&
+		cmptr->cmsg_len == CMSG_LEN(sizeof(int))) {
+		if (cmptr->cmsg_level != SOL_SOCKET)
+			/* ERROR : control level != SOL_SOCKET */;
+
+		if (cmptr->cmsg_type != SCM_RIGHTS)
+			 /* ERROR : control type != SCM_RIGHTS */;
+
+		newfd = *((int *) CMSG_DATA(cmptr));
+	} else {
+		newfd = -1;
+	}
+
+	return newfd;
+}
+
+static int
+Read_fd(int sock)
+{
+	int ret = read_fd(sock);
+	if (ret == -1) {
+		perror("Read_fd():");
+	} else {
+		printf("Read_fd(): Success\n");
+	}
+	return(ret);
+}
+
 static struct dmjob *
 mk_dmjob(int sock, struct dmreq dmreq)
 {
@@ -40,6 +97,8 @@ mk_dmjob(int sock, struct dmreq dmreq)
 
 	dmjob->path = (char *) Malloc(strlen(dmreq.path) + 1);
 	strcpy(dmjob->path, dmreq.path);
+
+	dmjob->fd = Read_fd(sock);
 
 	return dmjob;
 }

@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 
 
 #include "dm.h"
@@ -190,6 +191,52 @@ send_signal(int sock)
 }
 
 static int
+write_fd(int sock, int fd)
+{
+	int ret;
+	char c;
+	struct msghdr msg;
+	struct iovec iov;
+
+	char control[CMSG_SPACE(sizeof(int))];
+	struct cmsghdr *cmptr;
+
+	c = 0;
+	iov.iov_base = &c;
+	iov.iov_len = sizeof(c);
+
+	msg.msg_control = (caddr_t) control;
+	msg.msg_controllen = CMSG_LEN(sizeof(int));
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+
+	cmptr = CMSG_FIRSTHDR(&msg);
+	cmptr->cmsg_len = CMSG_LEN(sizeof(int));
+	cmptr->cmsg_level = SOL_SOCKET;
+	cmptr->cmsg_type = SCM_RIGHTS;
+	*((int *) CMSG_DATA(cmptr)) = fd;
+
+	ret = sendmsg(sock, &msg, 0);
+	if (ret == -1)
+		return (-1);
+	else
+		return (0);
+}
+
+static int
+Write_fd(int sock, int fd)
+{
+	int ret = write_fd(sock, fd);
+	if (ret == -1) {
+		perror("Write_fd():");
+	} else {
+		printf("Write_fd(): Success\n");
+	}
+}
+
+static int
 send_request(int sock, struct dmreq dmreq)
 {
 	char *reqbuf;
@@ -197,7 +244,11 @@ send_request(int sock, struct dmreq dmreq)
 
 	bufsize = mk_reqbuf(dmreq, &reqbuf, DMREQ);
 	err = sigsafe_write(sock, reqbuf, bufsize);
-	
+
+	int fd = open(dmreq.path, O_CREAT|O_RDWR|O_TRUNC);
+	Write_fd(sock, fd);
+	close(fd);	
+
 	free(reqbuf);
 	return(err);
 }
