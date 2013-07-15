@@ -265,7 +265,9 @@ fetch(struct dmjob dmjob, char *buf)
 
 	/* open output file */
 	if (dmjob.flags & O_STDOUT) {
-		/* output to stdout */
+		/* TODO: Intimate client about data on the channel
+		 * 	  and send the data to client's stdout not ours
+		 */
 		of = stdout;
 	} else if ((dmjob.flags & r_FLAG) && sb.st_size != -1) {
 		/* resume mode, local file exists */
@@ -296,8 +298,9 @@ fetch(struct dmjob dmjob, char *buf)
 				goto failure;
 			}
 			/* we got it, open local file */
-			if ((of = fopen(dmjob.path, "r+")) == NULL) {
-				warn("%s: fopen()", dmjob.path);
+			printf("fdopening %d\n", dmjob.fd);
+			if ((of = fdopen(dmjob.fd, "r+")) == NULL) {
+				warn("%s: fdopen()", dmjob.path);
 				goto failure;
 			}
 
@@ -371,7 +374,7 @@ fetch(struct dmjob dmjob, char *buf)
 			}
 		}
 		if (of == NULL)
-			of = fopen(dmjob.path, "w");
+			of = fdopen(dmjob.fd, "w");
 		if (of == NULL) {
 			warn("%s: open()", dmjob.path);
 			goto failure;

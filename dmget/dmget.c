@@ -1,6 +1,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 
 #include <unistd.h>
 #include <errno.h>
@@ -245,7 +246,7 @@ send_request(int sock, struct dmreq dmreq)
 	bufsize = mk_reqbuf(dmreq, &reqbuf, DMREQ);
 	err = sigsafe_write(sock, reqbuf, bufsize);
 
-	int fd = open(dmreq.path, O_CREAT|O_RDWR|O_TRUNC);
+	int fd = open(dmreq.path, O_CREAT|O_RDWR|O_TRUNC, S_IRUSR|S_IWUSR);
 	Write_fd(sock, fd);
 	close(fd);	
 
