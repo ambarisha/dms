@@ -89,12 +89,6 @@ mk_dmjob(int sock, struct dmreq dmreq)
 	dmjob->T_secs = dmreq.T_secs;
 	dmjob->flags = dmreq.flags;
 
-	if (dmjob->flags & V_TTY)
-		printf("v_tty is set :)\n");
-	else 	
-		printf("v_tty is already gone\n");
-	printf("HELLO???\n");
-
 	dmjob->i_filename = (char *) Malloc(strlen(dmreq.i_filename) + 1);
 	strcpy(dmjob->i_filename, dmreq.i_filename);
 
@@ -164,17 +158,7 @@ parse_request(char *rcvbuf, int bufsize)
 	
 	memcpy(&(dmreq->flags), rcvbuf + i, sizeof(dmreq->flags));
 
-	printf("flags = %d\n", *(int *)(rcvbuf + i));
 	i += sizeof(dmreq->flags);
-	printf("i after flags == %d\n honey", i);
-
-	if (dmreq->flags & V_TTY)
-		printf("v_tty is STTIIIIIILLL set :)\n");
-	else 	
-		printf("v_tty is already gone\n");
-	printf("RARRRR\n");
-
-	write(1, rcvbuf, bufsize);
 
 	int sz = strlen(rcvbuf+i);
 	dmreq->i_filename = (char *) Malloc(sz);

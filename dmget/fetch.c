@@ -280,10 +280,6 @@ fetch(char *URL, const char *path)
 	if (o_stdout) dmreq.flags |= O_STDOUT;
 	if (v_tty) dmreq.flags |= V_TTY;
 	
-
-	if (dmreq.flags & V_TTY) printf("v_tty is set\n");
-	else printf("v_tty is not set\n");
-
 	dmStatDisplayMethod = stat_display;
 	return (dmget(dmreq));
 }
