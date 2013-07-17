@@ -157,7 +157,6 @@ parse_request(char *rcvbuf, int bufsize)
 	i += sizeof(dmreq->T_secs);
 	
 	memcpy(&(dmreq->flags), rcvbuf + i, sizeof(dmreq->flags));
-
 	i += sizeof(dmreq->flags);
 
 	int sz = strlen(rcvbuf+i);

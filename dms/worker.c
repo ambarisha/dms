@@ -312,10 +312,7 @@ fetch(struct dmjob dmjob, char *buf)
 
 	/* open output file */
 	if (dmjob.flags & O_STDOUT) {
-		/* TODO: Intimate client about data on the channel
-		 * 	  and send the data to client's stdout not ours
-		 */
-		of = stdout;
+		of = fdopen(dmjob.fd, "a");
 	} else if ((dmjob.flags & r_FLAG) && sb.st_size != -1) {
 		/* resume mode, local file exists */
 		if (!(dmjob.flags & F_FLAG) && us.mtime && sb.st_mtime != us.mtime) {

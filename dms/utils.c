@@ -133,15 +133,11 @@ Peel(int sock, struct dmmsg *msg)
 	msg->buf = (char *) Malloc(bufsize);
 	msg->len = bufsize;
 
-	Read(sock, msg->buf, bufsize);
+	err = Read(sock, msg->buf, bufsize);
 	if (err == 0) {
 		free(msg->buf);
 		msg->len = 0;
 	}
-
-#if DEBUG
-	printf("{ msg->op = %d; msg->len = %d }\n", msg->op, msg->len);
-#endif
 
 	return bufsize;
 }

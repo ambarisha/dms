@@ -242,12 +242,16 @@ static int
 send_request(int sock, struct dmreq dmreq)
 {
 	char *reqbuf;
-	int bufsize, err;
+	int bufsize, err, fd;
 
 	bufsize = mk_reqbuf(dmreq, &reqbuf, DMREQ);
 	err = sigsafe_write(sock, reqbuf, bufsize);
 
-	int fd = open(dmreq.path, O_CREAT|O_RDWR|O_TRUNC, S_IRUSR|S_IWUSR);
+	if (dmreq.flags & O_STDOUT)
+		fd = STDOUT_FILENO;
+	else
+		fd = open(dmreq.path, O_CREAT|O_RDWR|O_TRUNC, S_IRUSR|S_IWUSR);
+
 	Write_fd(sock, fd);
 	close(fd);	
 
@@ -344,7 +348,8 @@ dmget(struct dmreq dmreq)
 			force = *((int *)(msg->buf));
 			memcpy(&xs, (msg->buf) + sizeof(force), sizeof(xs));
 			free_msg(&msg);
-			dmStatDisplayMethod(&xs, force);
+			if ((dmreq.flags & O_STDOUT) == 0)
+				dmStatDisplayMethod(&xs, force);
 			break;
 		case DMAUTHREQ:
 		default:
