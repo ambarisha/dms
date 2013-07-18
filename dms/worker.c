@@ -21,6 +21,7 @@ extern struct conn 	*conns;
 int
 authenticate(struct url *url)
 {
+	struct dmmsg msg;
 	struct conn *cur = conns;
 	while (cur != NULL) {
 		if (cur->url == url)
@@ -30,11 +31,24 @@ authenticate(struct url *url)
 
 	if (cur == NULL)
 		return -1; // Todo: Verify this
-	
-	struct dmmsg msg;
+
+	int bufsize = 0, i = 0, schlen, hlen;
+	schlen = strlen(url->scheme) + 1;
+	hlen = strlen(url->host) + 1;
+	bufsize += schlen + hlen + sizeof(url->port);
+
+	msg.buf = (char *) Malloc(bufsize);
+
+	strcpy(msg.buf, url->scheme);
+	i += schlen;
+
+	strcpy(msg.buf + i, url->host);
+	i += hlen;
+
+	*(int *) (msg.buf + i) = url->port;
+
 	msg.op = DMAUTHREQ;
-	msg.buf = NULL;
-	msg.len = 0;
+	msg.len = bufsize;
 	send_msg(cur->client, msg);
 
 	struct dmmsg *rcvmsg;

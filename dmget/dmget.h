@@ -5,20 +5,31 @@
 #include <sys/time.h>
 
 #include <stdio.h>
-#include <fetch.h>
 
 #include "dm.h"
+
+#define AUTH_USERLEN 256
+#define AUTH_PWDLEN 256
+
+
+struct dmauth {
+	int	 port;
+	char 	*scheme;
+	char	*host;
+	char	 user[AUTH_USERLEN+1];
+	char	 pwd[AUTH_PWDLEN+1]
+};
 
 extern int		 dmLastErrCode;
 extern int		 dmRestartCalls;
 extern char 		 dmLastErrString[];
 
-typedef int (*auth_t)(struct url *);
-extern auth_t		 dmAuthMethod;
+typedef int (*dm_auth_t)(struct dmauth *);
+extern dm_auth_t		 dmAuthMethod;
 typedef void (*stat_display_t) (struct xferstat *, int);
 extern stat_display_t	 dmStatDisplayMethod;
 
-int dm_request(struct dmreq);
-void dm_sighandler(int sig);
+int dmget(struct dmreq);
+void dmSigHandler(int sig);
 
 #endif /* _DMCLIENT_H */

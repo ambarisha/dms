@@ -13,7 +13,7 @@
 #include "dm.h"
 #include "dmget.h"
 
-auth_t		 dmAuthMethod;
+dm_auth_t	 dmAuthMethod;
 stat_display_t	 dmStatDisplayMethod;
 int		 dmTimeout;
 int		 dmRestartCalls;
@@ -37,7 +37,7 @@ Malloc(size_t size)
 	return ptr;
 }
 
-void dm_sighandler(int signal)
+void dmSigHandler(int signal)
 {
 	switch(signal) {
 	case SIGINT:
@@ -259,56 +259,62 @@ send_request(int sock, struct dmreq dmreq)
 	return(err);
 }
 
-static void
-free_msg(struct dmmsg **msg)
+struct dmauth *
+mk_dmauth(char *buf, int bufsize)
 {
-	free((*msg)->buf);
-	free(*msg);
-	*msg = NULL;
+	int i = 0, len;
+	struct dmauth *dmauth = (struct dmauth *) Malloc(sizeof(struct dmauth));
+
+	len = strlen(buf + i);	
+	dmauth->scheme = (char *) Malloc(len + 1);
+	strncpy(dmauth->scheme, buf + i, len);
+	i += len + 1;
+
+	len = strlen(buf + i);
+	dmauth->host = (char *) Malloc(len + 1);
+	strncpy(dmauth->host, buf + i, len);
+	i += len + 1;
+
+	dmauth->port = *(int *)(buf + i);
+	i += sizeof(int);
+	
+	return dmauth;
 }
 
-static struct dmmsg *
-recv_msg(int sock)
+void
+rm_dmauth(struct dmauth **dmauth)
 {
-	int err;
-	fd_set fds;
-	sigset_t sm;
-	struct dmmsg *msg;
+	free((*dmauth)->scheme);
+	free((*dmauth)->host);
+	free(*dmauth);
+	*dmauth = NULL;
+}
 
-	msg = (struct dmmsg *) Malloc(sizeof(struct dmmsg));
+static int
+send_dmauth(int sock, struct dmauth *dmauth)
+{
+	int ulen = strlen(dmauth->user) + 1;
+	int bufsize = ulen + strlen(dmauth->pwd) + 1;
+	char *buf = (char *) Malloc(bufsize);
 
-	FD_ZERO(&fds);
-	FD_SET(sock, &fds);
-	
-	err = Select(sock + 1, &fds, NULL, NULL, NULL);
-	if (err == -1)
-		return(-1);
+	strcpy(buf, dmauth->user);
+	strcpy(buf + ulen, dmauth->user);
 
-	sigemptyset(&sm);
-	sigaddset(&sm, SIGINT);
-	sigaddset(&sm, SIGINFO);
-
-	sigprocmask(SIG_BLOCK, &sm, NULL);
-	err = Peel(sock, msg);
-	sigprocmask(SIG_UNBLOCK, &sm, NULL);
-
-	if (err == -1) {
-		/* Set dmg_err* */
-		free_msg(&msg);
-		return NULL;
-	}
-	
-	return msg;
+	struct dmmsg msg;
+	msg.op = DMAUTHRESP;
+	msg.buf = buf;
+	msg.len = bufsize;
+	send_msg(sock, msg);
 }
 
 int
 dmget(struct dmreq dmreq)
 {
-	int sock, err, ret, force;
+	int sock, err, ret, force, i;
 	struct sockaddr_un dms_addr;
 	struct dmres *dmres;
 	struct xferstat xs;
-
+	struct dmauth *dmauth;
 	sock = Socket(AF_UNIX, SOCK_STREAM, 0);
 
 	dms_addr.sun_family = AF_UNIX;
@@ -351,6 +357,13 @@ dmget(struct dmreq dmreq)
 			dmStatDisplayMethod(&xs, force);
 			break;
 		case DMAUTHREQ:
+			dmauth = mk_dmauth(msg->buf, msg->len);
+			if (dmAuthMethod(dmauth) == -1) {
+				
+			}
+			send_dmauth(sock, dmauth);
+			rm_dmauth(&dmauth);
+			break;
 		default:
 			break;
 		}

@@ -207,21 +207,21 @@ stat_display(struct xferstat *xs, int force)
  * Ask the user for authentication details
  */
 static int
-query_auth(struct url *URL)
+query_auth(struct dmauth *auth)
 {
 	struct termios tios;
 	tcflag_t saved_flags;
 	int i, nopwd;
 
 	fprintf(stderr, "Authentication required for <%s://%s:%d/>!\n",
-	    URL->scheme, URL->host, URL->port);
+	    auth->scheme, auth->host, auth->port);
 
 	fprintf(stderr, "Login: ");
-	if (fgets(URL->user, sizeof URL->user, stdin) == NULL)
+	if (fgets(auth->user, sizeof auth->user, stdin) == NULL)
 		return (-1);
-	for (i = strlen(URL->user); i >= 0; --i)
-		if (URL->user[i] == '\r' || URL->user[i] == '\n')
-			URL->user[i] = '\0';
+	for (i = strlen(auth->user); i >= 0; --i)
+		if (auth->user[i] == '\r' || auth->user[i] == '\n')
+			auth->user[i] = '\0';
 
 	fprintf(stderr, "Password: ");
 	if (tcgetattr(STDIN_FILENO, &tios) == 0) {
@@ -229,17 +229,17 @@ query_auth(struct url *URL)
 		tios.c_lflag &= ~ECHO;
 		tios.c_lflag |= ECHONL|ICANON;
 		tcsetattr(STDIN_FILENO, TCSAFLUSH|TCSASOFT, &tios);
-		nopwd = (fgets(URL->pwd, sizeof URL->pwd, stdin) == NULL);
+		nopwd = (fgets(auth->pwd, sizeof auth->pwd, stdin) == NULL);
 		tios.c_lflag = saved_flags;
 		tcsetattr(STDIN_FILENO, TCSANOW|TCSASOFT, &tios);
 	} else {
-		nopwd = (fgets(URL->pwd, sizeof URL->pwd, stdin) == NULL);
+		nopwd = (fgets(auth->pwd, sizeof auth->pwd, stdin) == NULL);
 	}
 	if (nopwd)
 		return (-1);
-	for (i = strlen(URL->pwd); i >= 0; --i)
-		if (URL->pwd[i] == '\r' || URL->pwd[i] == '\n')
-			URL->pwd[i] = '\0';
+	for (i = strlen(auth->pwd); i >= 0; --i)
+		if (auth->pwd[i] == '\r' || auth->pwd[i] == '\n')
+			auth->pwd[i] = '\0';
 
 	return (0);
 }
@@ -473,7 +473,7 @@ main(int argc, char *argv[])
 
 	/* signal handling */
 	sa.sa_flags = 0;
-	sa.sa_handler = dm_sighandler;
+	sa.sa_handler = dmSigHandler;
 	sigemptyset(&sa.sa_mask);
 	sigaction(SIGALRM, &sa, NULL);
 	sa.sa_flags = SA_RESETHAND;
