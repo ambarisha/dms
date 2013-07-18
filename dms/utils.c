@@ -180,3 +180,45 @@ send_msg(int socket, struct dmmsg msg)
 	return (nbytes);
 }
 
+struct dmmsg *
+recv_msg(int sock)
+{
+	int bufsize = 0;
+	int err;
+	struct dmmsg *msg;
+	err = Read(sock, &bufsize, sizeof(bufsize));
+	if (err == 0) {
+		/* set dms_error */
+		return (NULL);
+	}
+
+	bufsize -= sizeof(bufsize);
+
+	err = Read(sock, &(msg->op), sizeof(msg->op));
+	if (err == 0) {
+		/* set dms_error */
+		return (NULL);
+	}
+	bufsize -= sizeof(msg->op);
+
+	msg->buf = (char *) Malloc(bufsize);
+	msg->len = bufsize;
+
+	err = Read(sock, msg->buf, bufsize);
+	if (err == 0) {
+		free(msg->buf);
+		msg->len = 0;
+		/* set dms_error */
+		return (NULL);
+	}
+
+	return msg;
+}
+
+void
+free_msg(struct dmmsg **msg)
+{
+	free((*msg)->buf);
+	free(*msg);
+	*msg = NULL;
+}

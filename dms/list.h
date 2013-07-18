@@ -1,8 +1,9 @@
 struct conn {
-	struct conn *prev;
-	struct conn *next;
-	int client;
-	int worker;
+	struct conn 	*prev;
+	struct conn 	*next;
+	int 		 client;
+	int 		 worker;
+	struct url	*url;
 };
 
 struct conn *

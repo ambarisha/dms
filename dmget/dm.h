@@ -69,5 +69,6 @@ struct xferstat {
 #define		DMAUTHRESP		4
 #define		DMSIG			5
 #define		DMSTAT			6
+#define		DMOUT			7
 
 #endif /* _DMCLIENT_H */

@@ -348,8 +348,7 @@ dmget(struct dmreq dmreq)
 			force = *((int *)(msg->buf));
 			memcpy(&xs, (msg->buf) + sizeof(force), sizeof(xs));
 			free_msg(&msg);
-			if ((dmreq.flags & O_STDOUT) == 0)
-				dmStatDisplayMethod(&xs, force);
+			dmStatDisplayMethod(&xs, force);
 			break;
 		case DMAUTHREQ:
 		default:

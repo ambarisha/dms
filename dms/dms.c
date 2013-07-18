@@ -14,7 +14,8 @@
 #include "list.h"
 #include "dms.h"
 
-int	 stop;
+int	 	 stop;
+struct conn	*conns;
 
 static int
 read_fd(int sock)
@@ -129,7 +130,7 @@ rm_dmjob(struct dmjob **dmjob)
 }
 
 static int
-parse_request(char *rcvbuf, int bufsize)
+mk_dmreq(char *rcvbuf, int bufsize)
 {
 	int i = 0;
 
@@ -178,9 +179,9 @@ parse_request(char *rcvbuf, int bufsize)
 }
 
 static int
-Parse_request(char *rcvbuf, int bufsize)
+Mk_dmreq(char *rcvbuf, int bufsize)
 {
-	struct dmreq *dmreq = parse_request(rcvbuf, bufsize);
+	struct dmreq *dmreq = mk_dmreq(rcvbuf, bufsize);
 	if (dmreq == NULL) {
 		perror("Parse_request():");
 #if DEBUG
@@ -192,7 +193,7 @@ Parse_request(char *rcvbuf, int bufsize)
 }
 
 static void
-Free_request(struct dmreq **dmreq)
+Rm_dmreq(struct dmreq **dmreq)
 {
 	free((*dmreq)->i_filename);
 	free((*dmreq)->URL);
@@ -235,27 +236,36 @@ handle_request(int csock, struct conn **conns)
 {
 	struct dmjob *dmjob;
 	struct dmreq *dmreq;
-	struct dmmsg msg;
+	struct dmmsg *msg;
 	struct dmrep report;
-	int err;
+	int ret;
 	pid_t pid;
 
-	Peel(csock, &msg);
+	msg = recv_msg(csock);
+	if (msg == NULL) {
+		/* set dms_error */
+		return -1;
+	}
 	
-	switch (msg.op) {
+	switch (msg->op) {
 	case DMREQ:
- 		dmreq = Parse_request(msg.buf, msg.len);
+ 		dmreq = Mk_dmreq(msg->buf, msg->len);
 		dmjob = Mk_dmjob(csock, *dmreq);
-		Free_request(&dmreq);
+		Rm_dmreq(&dmreq);
 		do_job(*dmjob, &report);
 		send_report(csock, report, DMRESP);
 		default:
-			/* Unknown opcode recieved */
-			return -1;
+			goto error;
 		break;
 	}
-	
-	return 1;
+success:
+	ret = 0;
+	goto done;
+error:
+	ret = -1;	
+done:
+	free_msg(msg);
+	return ret;
 }
 
 void
@@ -332,7 +342,9 @@ run_event_loop(int socket)
 {
 	int i, maxfd = socket;
 
-	struct conn *conns = NULL, *cur;
+	struct conn *cur;
+
+	conns = NULL;
 
 	fd_set fdset;
 

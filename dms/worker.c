@@ -8,12 +8,42 @@
 #include <signal.h>
 
 #include "dms.h"
+#include "list.h"
 #include "dm.h"
 
 static int	sigalrm;	/* SIGALRM received by client */
 static int 	siginfo;	/* SIGINFO received by client */
 static int 	sigint;		/* SIGINT received by client */
 static int	handle_siginfo;	/* Yes or No */
+
+extern struct conn 	*conns;
+
+int
+authenticate(struct url *url)
+{
+	struct conn *cur = conns;
+	while (cur != NULL) {
+		if (cur->url == url)
+			break;
+		cur = cur->next;
+	}
+
+	if (cur == NULL)
+		return -1; // Todo: Verify this
+	
+	struct dmmsg msg;
+	msg.op = DMAUTHREQ;
+	msg.buf = NULL;
+	msg.len = 0;
+	send_msg(cur->client, msg);
+
+	struct dmmsg *rcvmsg;
+	rcvmsg = recv_msg(cur->client);
+
+	strncpy(url->user, rcvmsg->buf, sizeof(url->user));
+	strncpy(url->pwd, rcvmsg->buf + strlen(rcvmsg->buf) + 1, sizeof(url->pwd));
+	free_msg(&rcvmsg);
+}
 
 static void
 stat_send(int csock, struct xferstat *xs, int force)
