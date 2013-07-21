@@ -43,4 +43,3 @@ rm_conn(struct conn *head, struct conn *conn)
 	free(conn);
 	return head;
 }
-

@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <err.h>
 #include <fetch.h>
+#include <pthread.h>
 
 #include "dm.h"
 #include "list.h"
@@ -16,6 +17,8 @@
 
 int	 	 stop;
 struct conn	*conns;
+
+void *run_worker(struct conn *conn);
 
 static int
 read_fd(int sock)
@@ -62,18 +65,6 @@ read_fd(int sock)
 	return newfd;
 }
 
-static int
-Read_fd(int sock)
-{
-	int ret = read_fd(sock);
-	if (ret == -1) {
-		perror("Read_fd():");
-	} else {
-		printf("Read_fd(): Success\n");
-	}
-	return(ret);
-}
-
 static struct dmjob *
 mk_dmjob(int sock, struct dmreq dmreq)
 {
@@ -99,23 +90,15 @@ mk_dmjob(int sock, struct dmreq dmreq)
 	dmjob->path = (char *) Malloc(strlen(dmreq.path) + 1);
 	strcpy(dmjob->path, dmreq.path);
 
-	dmjob->fd = Read_fd(sock);
+	dmjob->fd = read_fd(sock);
 	dmjob->csock = sock;
 
-	return dmjob;
-}
-
-static struct dmjob *
-Mk_dmjob(int sock, struct dmreq dmreq)
-{
-	struct dmjob *dmjob = mk_dmjob(sock, dmreq);
-	if (dmjob == NULL) {
-		perror("mk_dmjob():");
 #if DEBUG
-	} else {
+	if (dmjob == NULL)
+		perror("mk_dmjob():");
+	else
 		printf("mk_dmjob(): Success\n");
 #endif
-	}
 	return dmjob;
 }
 
@@ -135,7 +118,8 @@ mk_dmreq(char *rcvbuf, int bufsize)
 	int i = 0;
 
 	struct dmreq *dmreq = (struct dmreq *) Malloc(sizeof(struct dmreq));
-
+	if (dmreq == NULL) 
+		return NULL;
 	memcpy(&(dmreq->v_level), rcvbuf + i, sizeof(dmreq->v_level));
 	i += sizeof(dmreq->v_level);
 
@@ -178,20 +162,6 @@ mk_dmreq(char *rcvbuf, int bufsize)
 	return dmreq;
 }
 
-static int
-Mk_dmreq(char *rcvbuf, int bufsize)
-{
-	struct dmreq *dmreq = mk_dmreq(rcvbuf, bufsize);
-	if (dmreq == NULL) {
-		perror("Parse_request():");
-#if DEBUG
-	} else {
-		printf("Parse_reqeust(): Success\n");
-#endif
-	}
-	return dmreq;
-}
-
 static void
 Rm_dmreq(struct dmreq **dmreq)
 {
@@ -202,42 +172,14 @@ Rm_dmreq(struct dmreq **dmreq)
 	*dmreq = NULL;
 }
 
-static void
-send_report(int sock, struct dmrep report, char op)
-{
-	char *buf;
-	int bufsize = sizeof(report) - sizeof(report.errstr);
-	int errlen = strlen(report.errstr);
-	bufsize +=  errlen;	
-
-	buf = (char *) Malloc(bufsize);
-	int i = 0;
-	
-	memcpy(buf + i, &(report.status), sizeof(report.status));
-	i += sizeof(report.status);
-
-	memcpy(buf + i, &(report.errcode), sizeof(report.errcode));
-	i += sizeof(report.errcode);
-
-	strcpy(buf + i, report.errstr);
-	i += errlen;
-	
-	struct dmmsg msg;
-	msg.op = op;
-	msg.buf = buf;
-	msg.len = bufsize;
-	send_msg(sock, msg);
-	
-	free(buf);
-}
-
 static int
 handle_request(int csock, struct conn **conns)
 {
-	struct dmjob *dmjob;
-	struct dmreq *dmreq;
-	struct dmmsg *msg;
-	struct dmrep report;
+	struct dmjob 	*dmjob;
+	struct dmreq 	*dmreq;
+	struct dmmsg 	*msg;
+	pthread_t	 worker;
+	struct conn	*conn;
 	int ret;
 	pid_t pid;
 
@@ -249,11 +191,11 @@ handle_request(int csock, struct conn **conns)
 	
 	switch (msg->op) {
 	case DMREQ:
- 		dmreq = Mk_dmreq(msg->buf, msg->len);
-		dmjob = Mk_dmjob(csock, *dmreq);
+ 		dmreq = mk_dmreq(msg->buf, msg->len);
+		dmjob = mk_dmjob(csock, *dmreq);
 		Rm_dmreq(&dmreq);
-		do_job(*dmjob, &report);
-		send_report(csock, report, DMRESP);
+
+		pthread_create(&worker, NULL, run_worker, dmjob);
 		default:
 			goto error;
 		break;
@@ -276,80 +218,30 @@ sigint_handler(int sig)
 }
 
 static int
-handle_client_msg(struct conn *conn)
-{
-	struct dmmsg msg;
-	int ret = Peel(conn->client, &msg);
-	if (ret == 0)
-		 return(1);
-	
-	switch(msg.op) {
-	case DMSIG:
-		send_msg(conn->worker, msg);
-		break;
-	case DMAUTHRESP:
-		/* TODO: Implement these */
-		break;
-	default:
-		/* Unrecognized opcode */
-		break;
-	}
-	return(0);
-}
-
-static int
-handle_worker_msg(struct conn *conn)
-{
-	struct dmmsg msg;
-
-	int ret = Peel(conn->worker, &msg);
-	if (ret == 0) /* Worker closed the socket !! */
-		return(1);
-	
-	switch(msg.op) {
-	case DMRESP:
-		send_msg(conn->client, msg);
-		ret = 1;
-		break;
-	case DMAUTHREQ:	
-		/* TODO: Implement these */
-		break;
-	default:
-		/* Unrecoginized opcode */
-		break;	
-	}
-	return (0);
-}
-
-static int
 service_conn(struct conn *conn, fd_set *fdset)
 {
 	int ret = 0;
 	if (FD_ISSET(conn->client, fdset)) {
-		ret = handle_client_msg(conn);
-	}
-	
-	if (FD_ISSET(conn->worker, fdset)) {
-		ret |= handle_worker_msg(conn);
-		/* TODO: Do this better */
+		/* Received msg from client
+		 * Intimate worker with SIGUSR1
+		 */
 	}
 
+	if (conn->state == DONE)
+		ret = 1;
 	return (ret);
 }
 
 static void
 run_event_loop(int socket)
 {
-	int i, maxfd = socket;
-
+	int i, ret, maxfd = socket;
 	struct conn *cur;
-
+	void *retptr;
 	conns = NULL;
-
 	fd_set fdset;
 
 	signal(SIGINT, sigint_handler);
-
 	while (!stop) {
 
 		/* Prepare fdset and make select call */
@@ -359,12 +251,8 @@ run_event_loop(int socket)
 		cur = conns;
 		while (cur != NULL) {
 			FD_SET(cur->client, &fdset);
-			FD_SET(cur->worker, &fdset);
-
 			if (cur->client > maxfd)
 				maxfd = cur->client;
-			if (cur->worker > maxfd)
-				maxfd = cur->worker;
 			cur = cur->next;
 		}
 		
@@ -380,11 +268,10 @@ run_event_loop(int socket)
 		
 		cur = conns;
 		while (cur != NULL) {
-			int ret = service_conn(cur, &fdset);
+			ret = service_conn(cur, &fdset);
 			if (ret == 1) {
 				close(cur->client);
-				close(cur->worker);
-				/* What should happen to the worker */
+				pthread_join(cur->worker, &retptr);
 				conns = rm_conn(conns, cur);
 			}
 			cur = cur->next;
@@ -395,7 +282,7 @@ run_event_loop(int socket)
 	cur = conns;
 	while (cur != NULL) {	
 		close(cur->client);
-		close(cur->worker);
+		ret = service_conn(cur, &fdset);
 		/* TODO: Force the worker to quit as well */
 		conns = rm_conn(conns, cur);
 		cur = conns;

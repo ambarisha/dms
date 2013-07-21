@@ -18,7 +18,7 @@ static int	handle_siginfo;	/* Yes or No */
 
 extern struct conn 	*conns;
 
-int
+static int
 authenticate(struct url *url)
 {
 	struct dmmsg msg;
@@ -600,18 +600,51 @@ fetch(struct dmjob dmjob, char *buf)
 	return (r);
 }
 
-int
-do_job(struct dmjob dmjob, struct dmrep *report)
+static void
+send_report(int sock, struct dmrep report, char op)
 {
-	/* allocate buffer */
 	char *buf;
-	if (dmjob.B_size < MINBUFSIZE)
-		dmjob.B_size = MINBUFSIZE;
-	buf = (char *) Malloc(dmjob.B_size);
+	int bufsize = sizeof(report) - sizeof(report.errstr);
+	int errlen = strlen(report.errstr);
+	bufsize +=  errlen;	
 
-	int err = fetch(dmjob, buf);
-	report->status = err;
-	report->errcode = fetchLastErrCode;
-	report->errstr = fetchLastErrString;	
-	return err;
+	buf = (char *) Malloc(bufsize);
+	int i = 0;
+	
+	memcpy(buf + i, &(report.status), sizeof(report.status));
+	i += sizeof(report.status);
+
+	memcpy(buf + i, &(report.errcode), sizeof(report.errcode));
+	i += sizeof(report.errcode);
+
+	strcpy(buf + i, report.errstr);
+	i += errlen;
+	
+	struct dmmsg msg;
+	msg.op = op;
+	msg.buf = buf;
+	msg.len = bufsize;
+	send_msg(sock, msg);
+	
+	free(buf);
+}
+
+void *
+run_worker(struct dmjob *dmjob)
+{
+	struct dmrep report;
+
+	char *buf;
+	if (dmjob->B_size < MINBUFSIZE)
+		dmjob->B_size = MINBUFSIZE;
+	buf = (char *) Malloc(dmjob->B_size);
+
+	int err = fetch(*dmjob, buf);
+	report.status = err;
+	report.errcode = fetchLastErrCode;
+	report.errstr = fetchLastErrString;	
+	send_report(dmjob->csock, report, DMRESP);
+	dmjob->state = RUNNING;
+
+	return NULL;
 }

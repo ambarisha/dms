@@ -1,4 +1,9 @@
+#ifndef _DMS_H
+#define	_DMS_H
+
 #include <sys/types.h>
+
+typedef enum {RUNNING=0, DONE=1} state_t;
 
 struct dmjob {
 	int	 v_level;
@@ -11,6 +16,7 @@ struct dmjob {
 	long	 flags;
 	int	 fd;
 	int	 csock;
+	state_t	 state;
 
 #define		A_FLAG		(1 << 0)
 #define		F_FLAG		(1 << 1)
@@ -41,3 +47,5 @@ struct dmrep {
 
 #define MAX_LISTEN_QUEUE	5
 #define MINBUFSIZE		4096
+
+#endif
