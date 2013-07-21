@@ -183,20 +183,30 @@ send_msg(int socket, struct dmmsg msg)
 struct dmmsg *
 recv_msg(int sock)
 {
+	printf("in recv_msg\n");
 	int bufsize = 0;
 	int err;
 	struct dmmsg *msg;
 	err = Read(sock, &bufsize, sizeof(bufsize));
 	if (err == 0) {
 		/* set dms_error */
+#if DEBUG
+		fprintf(stderr, "recv_msg: remote end closed connection\n");
+#endif
 		return (NULL);
 	}
 
+	printf("bufsize = %d\n", bufsize);
+
 	bufsize -= sizeof(bufsize);
 
+	printf("sock = %d\n", sock);
 	err = Read(sock, &(msg->op), sizeof(msg->op));
 	if (err == 0) {
 		/* set dms_error */
+#if DEBUG
+		fprintf(stderr, "recv_msg: remote end closed connection\n");
+#endif
 		return (NULL);
 	}
 	bufsize -= sizeof(msg->op);
@@ -209,6 +219,9 @@ recv_msg(int sock)
 		free(msg->buf);
 		msg->len = 0;
 		/* set dms_error */
+#if DEBUG
+		fprintf(stderr, "recv_msg: remote end closed connection\n");
+#endif
 		return (NULL);
 	}
 

@@ -8,21 +8,15 @@
 #include <signal.h>
 
 #include "dms.h"
-#include "list.h"
 #include "dm.h"
 
-static int	sigalrm;	/* SIGALRM received by client */
-static int 	siginfo;	/* SIGINFO received by client */
-static int 	sigint;		/* SIGINT received by client */
-static int	handle_siginfo;	/* Yes or No */
-
-extern struct conn 	*conns;
+extern struct dmjob 	*jobs;
 
 static int
 authenticate(struct url *url)
 {
 	struct dmmsg msg;
-	struct conn *cur = conns;
+	struct dmjob *cur = jobs;
 	while (cur != NULL) {
 		if (cur->url == url)
 			break;
@@ -112,7 +106,7 @@ stat_bps(struct xferstat *xs)
 
 static void
 stat_start(struct xferstat *xs, const char *name, off_t size,
-	off_t offset, struct dmjob dmjob)
+	off_t offset, struct dmjob *dmjob)
 {
 	snprintf(xs->name, sizeof xs->name, "%s", name);
 	gettimeofday(&xs->start, NULL);
@@ -121,44 +115,36 @@ stat_start(struct xferstat *xs, const char *name, off_t size,
 	xs->offset = offset;
 	xs->rcvd = offset;
 	xs->lastrcvd = offset;
-	if ((dmjob.flags & V_TTY) && dmjob.v_level > 0)
-		stat_send(dmjob.csock, xs, 1);
-	else if (dmjob.v_level > 0)
+	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0)
+		stat_send(dmjob->client, xs, 1);
+	else if (dmjob->request->v_level > 0)
 		fprintf(stderr, "%-46s", xs->name);
 }
 
 static void
-stat_end(struct xferstat *xs, struct dmjob dmjob)
+stat_end(struct xferstat *xs, struct dmjob *dmjob)
 {
 	gettimeofday(&xs->last, NULL);
-	if ((dmjob.flags & V_TTY) && dmjob.v_level > 0) {
-		stat_send(dmjob.csock, xs, 2);
+	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0) {
+		stat_send(dmjob->client, xs, 2);
 		putc('\n', stderr);
-	} else if (dmjob.v_level > 0) {
+	} else if (dmjob->request->v_level > 0) {
 		fprintf(stderr, "        %s %s\n",
 		    stat_bytes(xs->size), stat_bps(xs));
 	}
 }
 
 static void
-stat_update(struct xferstat *xs, off_t rcvd, struct dmjob dmjob)
+stat_update(struct xferstat *xs, off_t rcvd, struct dmjob *dmjob)
 {
 	xs->rcvd = rcvd;
-	if ((dmjob.flags & V_TTY) && dmjob.v_level > 0)
-		stat_send(dmjob.csock, xs, 0);
-}
-
-static void
-alrm_handler(int sig)
-{
-	// Assert sig == SIGALRM
-	sigalrm = 1;
+	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0)
+		stat_send(dmjob->client, xs, 0);
 }
 
 static int
-fetch(struct dmjob dmjob, char *buf)
+fetch(struct dmjob *dmjob)
 {
-	struct url *url;
 	struct url_stat us;
 	struct stat sb, nsb;
 	struct xferstat xs;
@@ -171,6 +157,8 @@ fetch(struct dmjob dmjob, char *buf)
 	int r;
 	unsigned timeout;
 	char *ptr;
+	char *buf;
+	struct dmreq *dmreq = dmjob->request;
 
 	f = of = NULL;
 	tmppath = NULL;
@@ -180,34 +168,34 @@ fetch(struct dmjob dmjob, char *buf)
 	count = 0;
 
 	/* set verbosity level */
-	if (dmjob.v_level > 1)
+	if (dmreq->v_level > 1)
 		strcat(flags, "v");
-	if (dmjob.v_level > 2)
+	if (dmreq->v_level > 2)
 		fetchDebug = 1;
 
 	/* parse URL */
-	url = NULL;
-	if (*dmjob.URL == '\0') {
+	dmjob->url = NULL;
+	if (*dmreq->URL == '\0') {
 		warnx("empty URL");
 		goto failure;
 	}
-	if ((url = fetchParseURL(dmjob.URL)) == NULL) {
-		warnx("%s: parse error", dmjob.URL);
+	if ((dmjob->url = fetchParseURL(dmreq->URL)) == NULL) {
+		warnx("%s: parse error", dmreq->URL);
 		goto failure;
 	}
 
 	/* if no scheme was specified, take a guess */
-	if (!*url->scheme) {
-		if (!*url->host)
-			strcpy(url->scheme, SCHEME_FILE);
-		else if (strncasecmp(url->host, "ftp.", 4) == 0)
-			strcpy(url->scheme, SCHEME_FTP);
-		else if (strncasecmp(url->host, "www.", 4) == 0)
-			strcpy(url->scheme, SCHEME_HTTP);
+	if (!*(dmjob->url->scheme)) {
+		if (!*(dmjob->url->host))
+			strcpy(dmjob->url->scheme, SCHEME_FILE);
+		else if (strncasecmp(dmjob->url->host, "ftp.", 4) == 0)
+			strcpy(dmjob->url->scheme, SCHEME_FTP);
+		else if (strncasecmp(dmjob->url->host, "www.", 4) == 0)
+			strcpy(dmjob->url->scheme, SCHEME_HTTP);
 	}
 
 	/* common flags */
-	switch (dmjob.family) {
+	switch (dmreq->family) {
 	case PF_INET:
 		strcat(flags, "4");
 		break;
@@ -217,30 +205,30 @@ fetch(struct dmjob dmjob, char *buf)
 	}
 
 	/* FTP specific flags */
-	if (strcmp(url->scheme, SCHEME_FTP) == 0) {
-		if (dmjob.flags & p_FLAG)
+	if (strcmp(dmjob->url->scheme, SCHEME_FTP) == 0) {
+		if (dmreq->flags & p_FLAG)
 			strcat(flags, "p");
-		if (dmjob.flags & d_FLAG)
+		if (dmreq->flags & d_FLAG)
 			strcat(flags, "d");
-		if (dmjob.flags & U_FLAG)
+		if (dmreq->flags & U_FLAG)
 			strcat(flags, "l");
-		timeout = dmjob.T_secs ? dmjob.T_secs : dmjob.ftp_timeout;
+		timeout = dmreq->T_secs ? dmreq->T_secs : dmreq->ftp_timeout;
 	}
 
 	/* HTTP specific flags */
-	if (strcmp(url->scheme, SCHEME_HTTP) == 0 ||
-	    strcmp(url->scheme, SCHEME_HTTPS) == 0) {
-		if ((dmjob.flags & d_FLAG))
+	if (strcmp(dmjob->url->scheme, SCHEME_HTTP) == 0 ||
+	    strcmp(dmjob->url->scheme, SCHEME_HTTPS) == 0) {
+		if ((dmreq->flags & d_FLAG))
 			strcat(flags, "d");
-		if ((dmjob.flags & A_FLAG))
+		if ((dmreq->flags & A_FLAG))
 			strcat(flags, "A");
-		timeout = dmjob.T_secs ? dmjob.T_secs : dmjob.http_timeout;
-		if (dmjob.flags & i_FLAG) {
-			if (stat(dmjob.i_filename, &sb)) {
-				warn("%s: stat()", dmjob.i_filename);
+		timeout = dmreq->T_secs ? dmreq->T_secs : dmreq->http_timeout;
+		if (dmreq->flags & i_FLAG) {
+			if (stat(dmreq->i_filename, &sb)) {
+				warn("%s: stat()", dmreq->i_filename);
 				goto failure;
 			}
-			url->ims_time = sb.st_mtime;
+			dmjob->url->ims_time = sb.st_mtime;
 			strcat(flags, "i");
 		}
 	}
@@ -249,13 +237,13 @@ fetch(struct dmjob dmjob, char *buf)
 	fetchTimeout = timeout;
 
 	/* just print size */
-	if (dmjob.flags & s_FLAG) {
+	if (dmreq->flags & s_FLAG) {
 	//	if (timeout)
 	//			alarm(timeout);
-		r = fetchStat(url, &us, flags);
+		r = fetchStat(dmjob->url, &us, flags);
 		if (timeout)
 			alarm(0);
-		if (sigalrm || sigint)
+		if (dmjob->sigalrm || dmjob->sigint)
 			goto signal;
 		if (r == -1) {
 			warnx("%s", fetchLastErrString);
@@ -282,10 +270,10 @@ fetch(struct dmjob dmjob, char *buf)
 	 * the connection later if we change our minds.
 	 */
 	sb.st_size = -1;
-	if (!(dmjob.flags & O_STDOUT)) {
-		r = stat(dmjob.path, &sb);
-		if (r == 0 && (dmjob.flags & r_FLAG) && S_ISREG(sb.st_mode)) {
-			url->offset = sb.st_size;
+	if (!(dmreq->flags & O_STDOUT)) {
+		r = stat(dmreq->path, &sb);
+		if (r == 0 && (dmreq->flags & r_FLAG) && S_ISREG(sb.st_mode)) {
+			dmjob->url->offset = sb.st_size;
 		} else if (r == -1 || !S_ISREG(sb.st_mode)) {
 			/*
 			 * Whatever value sb.st_size has now is either
@@ -295,7 +283,7 @@ fetch(struct dmjob dmjob, char *buf)
 			sb.st_size = -1;
 		}
 		if (r == -1 && errno != ENOENT) {
-			warnx("%s: stat()", dmjob.path);
+			warnx("%s: stat()", dmreq->path);
 			goto failure;
 		}
 	}
@@ -303,14 +291,14 @@ fetch(struct dmjob dmjob, char *buf)
 	/* start the transfer */
 	if (timeout)
 		alarm(timeout);
-	f = fetchXGet(url, &us, flags);
+	f = fetchXGet(dmjob->url, &us, flags);
 	if (timeout)
 		alarm(0);
-	if (sigalrm || sigint)
+	if (dmjob->sigalrm || dmjob->sigint)
 		goto signal;
 	if (f == NULL) {
-		warnx("%s: %s", dmjob.URL, fetchLastErrString);
-		if ((dmjob.flags & i_FLAG) && strcmp(url->scheme, SCHEME_HTTP) == 0
+		warnx("%s: %s", dmreq->URL, fetchLastErrString);
+		if ((dmreq->flags & i_FLAG) && strcmp(dmjob->url->scheme, SCHEME_HTTP) == 0
 		    && fetchLastErrCode == FETCH_OK
 		    && strcmp(fetchLastErrString, "Not Modified") == 0) {
 			/* HTTP Not Modified Response, return OK. */
@@ -319,33 +307,33 @@ fetch(struct dmjob dmjob, char *buf)
 		} else
 			goto failure;
 	}
-	if (sigint)
+	if (dmjob->sigint)
 		goto signal;
 
 	/* check that size is as expected */
-	/*if (dmjob.S_size) {
+	/*if (dmreq->S_size) {
 		if (us.size == -1) {
-			warnx("%s: size unknown", dmjob.URL);
-		} else if (us.size != dmjob.S_size) {
+			warnx("%s: size unknown", dmreq->URL);
+		} else if (us.size != dmreq->S_size) {
 			warnx("%s: size mismatch: expected %jd, actual %jd",
-			    dmjob.URL, (intmax_t)dmjob.S_size, (intmax_t)us.size);
+			    dmreq->URL, (intmax_t)dmreq->S_size, (intmax_t)us.size);
 			goto failure;
 		}
 	}
 	*/
 
 	/* symlink instead of copy */
-	if ((dmjob.flags & l_FLAG) && strcmp(url->scheme, "file") == 0 && !(dmjob.flags & O_STDOUT)) {
-		if (symlink(url->doc, dmjob.path) == -1) {
-			warn("%s: symlink()", dmjob.path);
+	if ((dmreq->flags & l_FLAG) && strcmp(dmjob->url->scheme, "file") == 0 && !(dmreq->flags & O_STDOUT)) {
+		if (symlink(dmjob->url->doc, dmreq->path) == -1) {
+			warn("%s: symlink()", dmreq->path);
 			goto failure;
 		}
 		goto success;
 	}
 
-	if (us.size == -1 && !(dmjob.flags & O_STDOUT) && dmjob.v_level > 0)
-		warnx("%s: size of remote file is not known", dmjob.URL);
-	if (dmjob.v_level > 1) {
+	if (us.size == -1 && !(dmreq->flags & O_STDOUT) && dmreq->v_level > 0)
+		warnx("%s: size of remote file is not known", dmreq->URL);
+	if (dmreq->v_level > 1) {
 		if (sb.st_size != -1)
 			fprintf(stderr, "local size / mtime: %jd / %ld\n",
 			    (intmax_t)sb.st_size, (long)sb.st_mtime);
@@ -355,22 +343,22 @@ fetch(struct dmjob dmjob, char *buf)
 	}
 
 	/* open output file */
-	if (dmjob.flags & O_STDOUT) {
-		of = fdopen(dmjob.fd, "a");
-	} else if ((dmjob.flags & r_FLAG) && sb.st_size != -1) {
+	if (dmreq->flags & O_STDOUT) {
+		of = fdopen(dmjob->ofd, "a");
+	} else if ((dmreq->flags & r_FLAG) && sb.st_size != -1) {
 		/* resume mode, local file exists */
-		if (!(dmjob.flags & F_FLAG) && us.mtime && sb.st_mtime != us.mtime) {
+		if (!(dmreq->flags & F_FLAG) && us.mtime && sb.st_mtime != us.mtime) {
 			/* no match! have to refetch */
 			fclose(f);
 			/* if precious, warn the user and give up */
-			if ((dmjob.flags & R_FLAG)) {
+			if ((dmreq->flags & R_FLAG)) {
 				warnx("%s: local modification time "
-				    "does not match remote", dmjob.path);
+				    "does not match remote", dmreq->path);
 				goto failure_keep;
 			}
-		} else if (url->offset > sb.st_size) {
+		} else if (dmjob->url->offset > sb.st_size) {
 			/* gap between what we asked for and what we got */
-			warnx("%s: gap in resume mode", dmjob.URL);
+			warnx("%s: gap in resume mode", dmreq->URL);
 			fclose(of);
 			of = NULL;
 			/* picked up again later */
@@ -381,26 +369,26 @@ fetch(struct dmjob dmjob, char *buf)
 			if (sb.st_size > us.size) {
 				/* local file too long! */
 				warnx("%s: local file (%jd bytes) is longer "
-				    "than remote file (%jd bytes)", dmjob.path,
+				    "than remote file (%jd bytes)", dmreq->path,
 				    (intmax_t)sb.st_size, (intmax_t)us.size);
 				goto failure;
 			}
 			/* we got it, open local file */
-			if ((of = fdopen(dmjob.fd, "r+")) == NULL) {
-				warn("%s: fdopen()", dmjob.path);
+			if ((of = fdopen(dmjob->ofd, "r+")) == NULL) {
+				warn("%s: fdopen()", dmreq->path);
 				goto failure;
 			}
 
 			/* check that it didn't move under our feet */
 			if (fstat(fileno(of), &nsb) == -1) {
 				/* can't happen! */
-				warn("%s: fstat()", dmjob.path);
+				warn("%s: fstat()", dmreq->path);
 				goto failure;
 			}
 			if (nsb.st_dev != sb.st_dev ||
 			    nsb.st_ino != nsb.st_ino ||
 			    nsb.st_size != sb.st_size) {
-				warnx("%s: file has changed", dmjob.URL);
+				warnx("%s: file has changed", dmreq->URL);
 				fclose(of);
 				of = NULL;
 				sb = nsb;
@@ -408,13 +396,13 @@ fetch(struct dmjob dmjob, char *buf)
 			}
 		}
 		/* seek to where we left off */
-		if (of != NULL && fseeko(of, url->offset, SEEK_SET) != 0) {
-			warn("%s: fseeko()", dmjob.path);
+		if (of != NULL && fseeko(of, dmjob->url->offset, SEEK_SET) != 0) {
+			warn("%s: fseeko()", dmreq->path);
 			fclose(of);
 			of = NULL;
 			/* picked up again later */
 		}
-	} else if ((dmjob.flags & m_FLAG) && sb.st_size != -1) {
+	} else if ((dmreq->flags & m_FLAG) && sb.st_size != -1) {
 		/* mirror mode, local file exists */
 		if (sb.st_size == us.size && sb.st_mtime == us.mtime)
 			goto success;
@@ -427,32 +415,32 @@ fetch(struct dmjob dmjob, char *buf)
 		 * remote files didn't match.
 		 */
 
-		if (url->offset > 0) {
+		if (dmjob->url->offset > 0) {
 			/*
 			 * We tried to restart a transfer, but for
 			 * some reason gave up - so we have to restart
 			 * from scratch if we want the whole file
 			 */
-			url->offset = 0;
-			if ((f = fetchXGet(url, &us, flags)) == NULL) {
-				warnx("%s: %s", dmjob.URL, fetchLastErrString);
+			dmjob->url->offset = 0;
+			if ((f = fetchXGet(dmjob->url, &us, flags)) == NULL) {
+				warnx("%s: %s", dmreq->URL, fetchLastErrString);
 				goto failure;
 			}
-			if (sigint)
+			if (dmjob->sigint)
 				goto signal;
 		}
 
 		/* construct a temp file name */
 		if (sb.st_size != -1 && S_ISREG(sb.st_mode)) {
-			if ((slash = strrchr(dmjob.path, '/')) == NULL)
-				slash = dmjob.path;
+			if ((slash = strrchr(dmreq->path, '/')) == NULL)
+				slash = dmreq->path;
 			else
 				++slash;
 			asprintf(&tmppath, "%.*s.dm.XXXXXX.%s",
-			    (int)(slash - dmjob.path), dmjob.path, slash);
+			    (int)(slash - dmreq->path), dmreq->path, slash);
 			if (tmppath != NULL) {
 				if (mkstemps(tmppath, strlen(slash) + 1) == -1) {
-					warn("%s: mkstemps()", dmjob.path);
+					warn("%s: mkstemps()", dmreq->path);
 					goto failure;
 				}
 				of = fopen(tmppath, "w");
@@ -461,37 +449,41 @@ fetch(struct dmjob dmjob, char *buf)
 			}
 		}
 		if (of == NULL)
-			of = fdopen(dmjob.fd, "w");
+			of = fdopen(dmjob->ofd, "w");
 		if (of == NULL) {
-			warn("%s: open()", dmjob.path);
+			warn("%s: open()", dmreq->path);
 			goto failure;
 		}
 	}
-	count = url->offset;
+	count = dmjob->url->offset;
 
 	/* start the counter */
-	stat_start(&xs, dmjob.path, us.size, count, dmjob);
+	stat_start(&xs, dmreq->path, us.size, count, dmjob);
 
-	sigalrm = siginfo = sigint = 0;
+	dmjob->sigalrm = dmjob->siginfo = dmjob->sigint = 0;
+
+	if (dmreq->B_size < MINBUFSIZE)
+		dmreq->B_size = MINBUFSIZE;
+	buf = (char *) Malloc(dmreq->B_size);
 
 	/* suck in the data */
-	handle_siginfo = 1;
-	while (!sigint) {
-		if (us.size != -1 && us.size - count < dmjob.B_size &&
+	dmjob->siginfo_en = 1;
+	while (!dmjob->sigint) {
+		if (us.size != -1 && us.size - count < dmreq->B_size &&
 		    us.size - count >= 0)
 			size = us.size - count;
 		else
-			size = dmjob.B_size;
-		if (siginfo) {
+			size = dmreq->B_size;
+		if (dmjob->siginfo) {
 			stat_end(&xs, dmjob);
-			siginfo = 0;
+			dmjob->siginfo = 0;
 		}
 
 		if (size == 0)
 			break;
 
 		if ((readcnt = fread(buf, 1, size, f)) < size) {
-			if (ferror(f) && errno == EINTR && !sigint)
+			if (ferror(f) && errno == EINTR && !dmjob->sigint)
 				clearerr(f);
 			else if (readcnt == 0)
 				break;
@@ -500,7 +492,7 @@ fetch(struct dmjob dmjob, char *buf)
 		stat_update(&xs, count += readcnt, dmjob);
 		for (ptr = buf; readcnt > 0; ptr += wr, readcnt -= wr)
 			if ((wr = fwrite(ptr, 1, readcnt, of)) < readcnt) {
-				if (ferror(of) && errno == EINTR && !sigint)
+				if (ferror(of) && errno == EINTR && !dmjob->sigint)
 					clearerr(of);
 				else
 					break;
@@ -508,9 +500,9 @@ fetch(struct dmjob dmjob, char *buf)
 		if (readcnt != 0)
 			break;
 	}
-	if (!sigalrm)
-		sigalrm = ferror(f) && errno == ETIMEDOUT;
-	handle_siginfo = 0;
+	if (!dmjob->sigalrm)
+		dmjob->sigalrm = ferror(f) && errno == ETIMEDOUT;
+	dmjob->siginfo_en = 0;
 
 	stat_end(&xs, dmjob);
 
@@ -521,22 +513,22 @@ fetch(struct dmjob dmjob, char *buf)
 	 */
  signal:
 	/* set mtime of local file */
-	if (!(dmjob.flags & n_FLAG) && us.mtime && !(dmjob.flags & O_STDOUT) && of != NULL &&
-	    (stat(dmjob.path, &sb) != -1) && sb.st_mode & S_IFREG) {
+	if (!(dmreq->flags & n_FLAG) && us.mtime && !(dmreq->flags & O_STDOUT) && of != NULL &&
+	    (stat(dmreq->path, &sb) != -1) && sb.st_mode & S_IFREG) {
 		struct timeval tv[2];
 
 		fflush(of);
 		tv[0].tv_sec = (long)(us.atime ? us.atime : us.mtime);
 		tv[1].tv_sec = (long)us.mtime;
 		tv[0].tv_usec = tv[1].tv_usec = 0;
-		if (utimes(tmppath ? tmppath : dmjob.path, tv))
-			warn("%s: utimes()", tmppath ? tmppath : dmjob.path);
+		if (utimes(tmppath ? tmppath : dmreq->path, tv))
+			warn("%s: utimes()", tmppath ? tmppath : dmreq->path);
 	}
 
 	/* timed out or interrupted? */
-	if (sigalrm)
+	if (dmjob->sigalrm)
 		warnx("transfer timed out");
-	if (sigint) {
+	if (dmjob->sigint) {
 		warnx("transfer interrupted");
 		goto failure;
 	}
@@ -545,12 +537,12 @@ fetch(struct dmjob dmjob, char *buf)
 	if (f == NULL)
 		goto failure;
 
-	if (!sigalrm) {
+	if (!dmjob->sigalrm) {
 		/* check the status of our files */
 		if (ferror(f))
-			warn("%s", dmjob.URL);
+			warn("%s", dmreq->URL);
 		if (ferror(of))
-			warn("%s", dmjob.path);
+			warn("%s", dmreq->path);
 		if (ferror(f) || ferror(of))
 			goto failure;
 	}
@@ -558,7 +550,7 @@ fetch(struct dmjob dmjob, char *buf)
 	/* did the transfer complete normally? */
 	if (us.size != -1 && count < us.size) {
 		warnx("%s appears to be truncated: %jd/%jd bytes",
-		    dmjob.path, (intmax_t)count, (intmax_t)us.size);
+		    dmreq->path, (intmax_t)count, (intmax_t)us.size);
 		goto failure_keep;
 	}
 
@@ -566,25 +558,25 @@ fetch(struct dmjob dmjob, char *buf)
 	 * If the transfer timed out and we didn't know how much to
 	 * expect, assume the worst (i.e. we didn't get all of it)
 	 */
-	if (sigalrm && us.size == -1) {
-		warnx("%s may be truncated", dmjob.path);
+	if (dmjob->sigalrm && us.size == -1) {
+		warnx("%s may be truncated", dmreq->path);
 		goto failure_keep;
 	}
 
  success:
 
 	r = 0;
-	if (tmppath != NULL && rename(tmppath, dmjob.path) == -1) {
-		warn("%s: rename()", dmjob.path);
+	if (tmppath != NULL && rename(tmppath, dmreq->path) == -1) {
+		warn("%s: rename()", dmreq->path);
 		goto failure_keep;
 	}
 	goto done;
  failure:
-	if (of && of != stdout && !(dmjob.flags & R_FLAG) && !(dmjob.flags & r_FLAG))
-		if (stat(dmjob.path, &sb) != -1 && (sb.st_mode & S_IFREG))
-			unlink(tmppath ? tmppath : dmjob.path);
-	if ((dmjob.flags & R_FLAG) && tmppath != NULL && sb.st_size == -1)
-		rename(tmppath, dmjob.path); /* ignore errors here */
+	if (of && of != stdout && !(dmreq->flags & R_FLAG) && !(dmreq->flags & r_FLAG))
+		if (stat(dmreq->path, &sb) != -1 && (sb.st_mode & S_IFREG))
+			unlink(tmppath ? tmppath : dmreq->path);
+	if ((dmreq->flags & R_FLAG) && tmppath != NULL && sb.st_size == -1)
+		rename(tmppath, dmreq->path); /* ignore errors here */
  failure_keep:
 	r = -1;
 	goto done;
@@ -593,8 +585,8 @@ fetch(struct dmjob dmjob, char *buf)
 		fclose(f);
 	if (of && of != stdout)
 		fclose(of);
-	if (url)
-		fetchFreeURL(url);
+	if (dmjob->url)
+		fetchFreeURL(dmjob->url);
 	if (tmppath != NULL)
 		free(tmppath);
 	return (r);
@@ -629,21 +621,41 @@ send_report(int sock, struct dmrep report, char op)
 	free(buf);
 }
 
+void
+sig_handler(int sig)
+{
+	struct dmjob *tmp = jobs;
+	struct dmmsg *msg;
+	int *clisig;
+	pthread_t tid = pthread_self();
+	if (sig == SIGUSR1) {
+		while (tmp != NULL) {
+			if (pthread_equal(tid, *(tmp->worker)) != 0)
+				break;
+			tmp = tmp->next;
+		}
+
+		msg = recv_msg(tmp->client);
+		clisig = msg->buf;	
+		if (*clisig == SIGINT)
+			tmp->sigint = 1;
+		else if (*clisig == SIGINFO)
+			tmp->siginfo = 1;
+		else if (*clisig == SIGALRM)
+			tmp->siginfo = 1;
+	}
+}
+
 void *
 run_worker(struct dmjob *dmjob)
 {
 	struct dmrep report;
 
-	char *buf;
-	if (dmjob->B_size < MINBUFSIZE)
-		dmjob->B_size = MINBUFSIZE;
-	buf = (char *) Malloc(dmjob->B_size);
-
-	int err = fetch(*dmjob, buf);
+	int err = fetch(dmjob);
 	report.status = err;
 	report.errcode = fetchLastErrCode;
 	report.errstr = fetchLastErrString;	
-	send_report(dmjob->csock, report, DMRESP);
+	send_report(dmjob->client, report, DMRESP);
 	dmjob->state = RUNNING;
 
 	return NULL;

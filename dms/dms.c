@@ -12,13 +12,46 @@
 #include <pthread.h>
 
 #include "dm.h"
-#include "list.h"
 #include "dms.h"
 
 int	 	 stop;
-struct conn	*conns;
+struct dmjob	*jobs;
 
-void *run_worker(struct conn *conn);
+void *run_worker(struct dmjob *job);
+
+static struct dmjob *
+add_job(struct dmjob *head, struct dmjob *new)
+{ 
+	new->prev = NULL;
+	new->next = NULL;
+
+	if (head == NULL)
+		return new;
+
+	head->prev = new;
+	new->next = head;	
+}
+
+static struct dmjob *
+rm_job(struct dmjob *head, struct dmjob *job)
+{
+	if (head == NULL)
+		return NULL;
+	
+	if (job == NULL)
+		return head;
+		
+	if (job->next != NULL) 
+		job->next->prev = job->prev;
+
+	if (job->prev != NULL)
+		job->prev->next = job->next;
+	
+	if (job == head) 
+		return job->next;
+
+	return head;
+}
 
 static int
 read_fd(int sock)
@@ -66,53 +99,27 @@ read_fd(int sock)
 }
 
 static struct dmjob *
-mk_dmjob(int sock, struct dmreq dmreq)
+mk_dmjob(struct dmreq *dmreq, int client)
 {
 	struct dmjob *dmjob = (struct dmjob *) Malloc(sizeof(struct dmjob));
-
-	/* Right now dmjob and dmreq are same */
-	dmjob->v_level = dmreq.v_level;
-	dmjob->family = dmreq.family;
-	dmjob->ftp_timeout = dmreq.ftp_timeout;
-	dmjob->http_timeout = dmreq.http_timeout;
-	dmjob->B_size = dmreq.B_size;
-
-	dmjob->S_size = dmreq.S_size;
-	dmjob->T_secs = dmreq.T_secs;
-	dmjob->flags = dmreq.flags;
-
-	dmjob->i_filename = (char *) Malloc(strlen(dmreq.i_filename) + 1);
-	strcpy(dmjob->i_filename, dmreq.i_filename);
-
-	dmjob->URL = (char *) Malloc(strlen(dmreq.URL) + 1);
-	strcpy(dmjob->URL, dmreq.URL);
-
-	dmjob->path = (char *) Malloc(strlen(dmreq.path) + 1);
-	strcpy(dmjob->path, dmreq.path);
-
-	dmjob->fd = read_fd(sock);
-	dmjob->csock = sock;
-
-#if DEBUG
-	if (dmjob == NULL)
-		perror("mk_dmjob():");
-	else
-		printf("mk_dmjob(): Success\n");
-#endif
+	dmjob->request = dmreq;
+	dmjob->ofd = read_fd(client);
+	if (dmjob->ofd == -1) {
+		/* Handle error */
+		free(dmjob);
+		return NULL;
+	}
+	dmjob->client = client;
+	dmjob->sigint = 0;
+	dmjob->sigalrm = 0;
+	dmjob->siginfo = 0;
+	dmjob->siginfo_en = 0;
+	dmjob->state = RUNNING;
+	dmjob->url = NULL;
 	return dmjob;
 }
 
-static void
-rm_dmjob(struct dmjob **dmjob)
-{
-	free((*dmjob)->i_filename);
-	free((*dmjob)->path);
-	free((*dmjob)->URL);
-	free(*dmjob);
-	*dmjob = NULL;
-}
-
-static int
+static struct dmreq *
 mk_dmreq(char *rcvbuf, int bufsize)
 {
 	int i = 0;
@@ -163,7 +170,7 @@ mk_dmreq(char *rcvbuf, int bufsize)
 }
 
 static void
-Rm_dmreq(struct dmreq **dmreq)
+rm_dmreq(struct dmreq **dmreq)
 {
 	free((*dmreq)->i_filename);
 	free((*dmreq)->URL);
@@ -173,13 +180,11 @@ Rm_dmreq(struct dmreq **dmreq)
 }
 
 static int
-handle_request(int csock, struct conn **conns)
+handle_request(int csock)
 {
-	struct dmjob 	*dmjob;
 	struct dmreq 	*dmreq;
 	struct dmmsg 	*msg;
-	pthread_t	 worker;
-	struct conn	*conn;
+	struct dmjob	*dmjob;
 	int ret;
 	pid_t pid;
 
@@ -192,12 +197,12 @@ handle_request(int csock, struct conn **conns)
 	switch (msg->op) {
 	case DMREQ:
  		dmreq = mk_dmreq(msg->buf, msg->len);
-		dmjob = mk_dmjob(csock, *dmreq);
-		Rm_dmreq(&dmreq);
-
-		pthread_create(&worker, NULL, run_worker, dmjob);
-		default:
-			goto error;
+		dmjob = mk_dmjob(dmreq, csock);
+		jobs = add_job(jobs, dmjob);
+		pthread_create(&(dmjob->worker), NULL, run_worker, dmjob);
+		break;
+	default:
+		goto error;
 		break;
 	}
 success:
@@ -218,16 +223,13 @@ sigint_handler(int sig)
 }
 
 static int
-service_conn(struct conn *conn, fd_set *fdset)
+service_job(struct dmjob *job, fd_set *fdset)
 {
 	int ret = 0;
-	if (FD_ISSET(conn->client, fdset)) {
-		/* Received msg from client
-		 * Intimate worker with SIGUSR1
-		 */
-	}
+	if (FD_ISSET(job->client, fdset))
+		pthread_kill(job->worker, SIGUSR1);
 
-	if (conn->state == DONE)
+	if (job->state == DONE)
 		ret = 1;
 	return (ret);
 }
@@ -236,9 +238,9 @@ static void
 run_event_loop(int socket)
 {
 	int i, ret, maxfd = socket;
-	struct conn *cur;
+	struct dmjob *cur;
 	void *retptr;
-	conns = NULL;
+	jobs = NULL;
 	fd_set fdset;
 
 	signal(SIGINT, sigint_handler);
@@ -248,7 +250,7 @@ run_event_loop(int socket)
 		FD_ZERO(&fdset);
 		FD_SET(socket, &fdset);
 
-		cur = conns;
+		cur = jobs;
 		while (cur != NULL) {
 			FD_SET(cur->client, &fdset);
 			if (cur->client > maxfd)
@@ -263,29 +265,29 @@ run_event_loop(int socket)
 			size_t cliaddrlen = sizeof(cliaddr);
 			int csock = Accept(socket, (struct sockaddr *) &cliaddr,
 					&cliaddrlen);
-			handle_request(csock, &conns);
+			handle_request(csock);
 		}
 		
-		cur = conns;
+		cur = jobs;
 		while (cur != NULL) {
-			ret = service_conn(cur, &fdset);
+			ret = service_job(cur, &fdset);
 			if (ret == 1) {
 				close(cur->client);
 				pthread_join(cur->worker, &retptr);
-				conns = rm_conn(conns, cur);
+				jobs = rm_job(jobs, cur);
 			}
 			cur = cur->next;
 		}
 			
 	}
 
-	cur = conns;
+	cur = jobs;
 	while (cur != NULL) {	
 		close(cur->client);
-		ret = service_conn(cur, &fdset);
+		ret = service_job(cur, &fdset);
 		/* TODO: Force the worker to quit as well */
-		conns = rm_conn(conns, cur);
-		cur = conns;
+		jobs = rm_job(jobs, cur);
+		cur = jobs;
 	}
 }
 
