@@ -650,13 +650,14 @@ void *
 run_worker(struct dmjob *dmjob)
 {
 	struct dmrep report;
+	dmjob->state = RUNNING;
 
 	int err = fetch(dmjob);
 	report.status = err;
 	report.errcode = fetchLastErrCode;
 	report.errstr = fetchLastErrString;	
 	send_report(dmjob->client, report, DMRESP);
-	dmjob->state = RUNNING;
+	dmjob->state = DONE;
 
 	return NULL;
 }

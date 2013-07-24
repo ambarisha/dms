@@ -11,5 +11,6 @@ LDADD=		-lfetch -lssl -lcrypto -lpthread
 DPADD=		${LIBFETCH}
 LDADD=		-lfetch
 .endif
+CFLAGS+=	-g
 
 .include <bsd.prog.mk>

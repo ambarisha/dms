@@ -211,7 +211,7 @@ success:
 error:
 	ret = -1;	
 done:
-	free_msg(msg);
+	free_msg(&msg);
 	return ret;
 }
 
@@ -227,7 +227,7 @@ service_job(struct dmjob *job, fd_set *fdset)
 {
 	int ret = 0;
 	if (FD_ISSET(job->client, fdset))
-		pthread_kill(job->worker, SIGUSR1);
+		//pthread_kill(job->worker, SIGUSR1);
 
 	if (job->state == DONE)
 		ret = 1;
@@ -260,14 +260,6 @@ run_event_loop(int socket)
 		
 		Select(maxfd + 1, &fdset, NULL, NULL, NULL);
 
-		if (FD_ISSET(socket, &fdset)) {
-			struct sockaddr_un cliaddr;
-			size_t cliaddrlen = sizeof(cliaddr);
-			int csock = Accept(socket, (struct sockaddr *) &cliaddr,
-					&cliaddrlen);
-			handle_request(csock);
-		}
-		
 		cur = jobs;
 		while (cur != NULL) {
 			ret = service_job(cur, &fdset);
@@ -278,7 +270,14 @@ run_event_loop(int socket)
 			}
 			cur = cur->next;
 		}
-			
+
+		if (FD_ISSET(socket, &fdset)) {
+			struct sockaddr_un cliaddr;
+			size_t cliaddrlen = sizeof(cliaddr);
+			int csock = Accept(socket, (struct sockaddr *) &cliaddr,
+					&cliaddrlen);
+			handle_request(csock);
+		}
 	}
 
 	cur = jobs;

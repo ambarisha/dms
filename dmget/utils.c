@@ -185,18 +185,27 @@ recv_msg(int sock)
 {
 	int bufsize = 0;
 	int err;
-	struct dmmsg *msg;
+	struct dmmsg *msg = (struct dmmsg *) Malloc(sizeof(struct dmmsg));
 	err = Read(sock, &bufsize, sizeof(bufsize));
 	if (err == 0) {
 		/* set dms_error */
+#if DEBUG
+		fprintf(stderr, "recv_msg: remote end closed connection\n");
+#endif
+		free(msg);
 		return (NULL);
 	}
+
 
 	bufsize -= sizeof(bufsize);
 
 	err = Read(sock, &(msg->op), sizeof(msg->op));
 	if (err == 0) {
 		/* set dms_error */
+#if DEBUG
+		fprintf(stderr, "recv_msg: remote end closed connection\n");
+#endif
+		free(msg);
 		return (NULL);
 	}
 	bufsize -= sizeof(msg->op);
@@ -209,6 +218,10 @@ recv_msg(int sock)
 		free(msg->buf);
 		msg->len = 0;
 		/* set dms_error */
+#if DEBUG
+		fprintf(stderr, "recv_msg: remote end closed connection\n");
+#endif
+		free(msg);
 		return (NULL);
 	}
 
@@ -218,6 +231,7 @@ recv_msg(int sock)
 void
 free_msg(struct dmmsg **msg)
 {
+
 	free((*msg)->buf);
 	free(*msg);
 	*msg = NULL;
