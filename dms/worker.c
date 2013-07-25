@@ -6,11 +6,16 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "dms.h"
 #include "dm.h"
 
+
 extern struct dmjob 	*jobs;
+
+#define	TMP_EXT		".tmp"
 
 static int
 authenticate(struct url *url)
@@ -143,29 +148,14 @@ stat_update(struct xferstat *xs, off_t rcvd, struct dmjob *dmjob)
 }
 
 static int
-fetch(struct dmjob *dmjob)
+mk_url(struct dmjob *dmjob, char *flags)
 {
-	struct url_stat us;
-	struct stat sb, nsb;
-	struct xferstat xs;
-	FILE *f, *of;
-	size_t size, readcnt, wr;
-	off_t count;
-	char flags[8];
-	const char *slash;
-	char *tmppath;
-	int r;
-	unsigned timeout;
-	char *ptr;
-	char *buf;
 	struct dmreq *dmreq = dmjob->request;
+	struct stat sb;
+	int r;
 
-	f = of = NULL;
-	tmppath = NULL;
-
-	timeout = 0;
-	*flags = 0;
-	count = 0;
+	if (dmjob->url != NULL)
+		return 0;
 
 	/* set verbosity level */
 	if (dmreq->v_level > 1)
@@ -174,7 +164,6 @@ fetch(struct dmjob *dmjob)
 		fetchDebug = 1;
 
 	/* parse URL */
-	dmjob->url = NULL;
 	if (*dmreq->URL == '\0') {
 		warnx("empty URL");
 		goto failure;
@@ -212,7 +201,7 @@ fetch(struct dmjob *dmjob)
 			strcat(flags, "d");
 		if (dmreq->flags & U_FLAG)
 			strcat(flags, "l");
-		timeout = dmreq->T_secs ? dmreq->T_secs : dmreq->ftp_timeout;
+		dmjob->timeout = dmreq->T_secs ? dmreq->T_secs : dmreq->ftp_timeout;
 	}
 
 	/* HTTP specific flags */
@@ -222,7 +211,7 @@ fetch(struct dmjob *dmjob)
 			strcat(flags, "d");
 		if ((dmreq->flags & A_FLAG))
 			strcat(flags, "A");
-		timeout = dmreq->T_secs ? dmreq->T_secs : dmreq->http_timeout;
+		dmjob->timeout = dmreq->T_secs ? dmreq->T_secs : dmreq->http_timeout;
 		if (dmreq->flags & i_FLAG) {
 			if (stat(dmreq->i_filename, &sb)) {
 				warn("%s: stat()", dmreq->i_filename);
@@ -234,27 +223,53 @@ fetch(struct dmjob *dmjob)
 	}
 
 	/* set the protocol timeout. */
-	fetchTimeout = timeout;
+	fetchTimeout = dmjob->timeout;
+	goto success;
 
-	/* just print size */
-	if (dmreq->flags & s_FLAG) {
-	//	if (timeout)
-	//			alarm(timeout);
-		r = fetchStat(dmjob->url, &us, flags);
-		if (timeout)
-			alarm(0);
-		if (dmjob->sigalrm || dmjob->sigint)
-			goto signal;
-		if (r == -1) {
-			warnx("%s", fetchLastErrString);
-			goto failure;
-		}
-		if (us.size == -1)
-			printf("Unknown\n");
-		else
-			printf("%jd\n", (intmax_t)us.size);
-		goto success;
-	}
+signal:
+	/* report that we were timedout/interrupted */
+failure:
+	free(dmjob->url->doc);
+	free(dmjob->url);
+	dmjob->url = NULL;
+success:
+	return (r);
+}
+
+static int
+fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
+{
+	struct stat sb, nsb;
+	struct xferstat xs;
+	FILE *of;
+	size_t size, readcnt, wr;
+	off_t count;
+	char flags[8];
+	const char *slash;
+	char *tmppath;
+	int r;
+	char *ptr;
+	char *buf;
+	struct dmreq *dmreq = dmjob->request;
+
+	of = NULL;
+	tmppath = NULL;
+
+	dmjob->timeout = 0;
+	*flags = 0;
+	count = 0;
+	
+	r = mk_url(dmjob, flags);
+
+	/* Set timeout */
+	if (strcmp(dmjob->url->scheme, SCHEME_FTP) == 0)
+		dmjob->timeout = dmreq->T_secs ? dmreq->T_secs : dmreq->ftp_timeout;
+	else if (strcmp(dmjob->url->scheme, SCHEME_HTTP) == 0 ||
+	    strcmp(dmjob->url->scheme, SCHEME_HTTPS) == 0) 
+		dmjob->timeout = dmreq->T_secs ? dmreq->T_secs : dmreq->http_timeout;
+
+	/* set the protocol timeout. */
+	fetchTimeout = dmjob->timeout;
 
 	/*
 	 * If the -r flag was specified, we have to compare the local
@@ -289,24 +304,12 @@ fetch(struct dmjob *dmjob)
 	}
 
 	/* start the transfer */
-	if (timeout)
-		alarm(timeout);
-	f = fetchXGet(dmjob->url, &us, flags);
-	if (timeout)
-		alarm(0);
+	if (dmjob->timeout)
+		alarm(dmjob->timeout);
+
 	if (dmjob->sigalrm || dmjob->sigint)
 		goto signal;
-	if (f == NULL) {
-		warnx("%s: %s", dmreq->URL, fetchLastErrString);
-		if ((dmreq->flags & i_FLAG) && strcmp(dmjob->url->scheme, SCHEME_HTTP) == 0
-		    && fetchLastErrCode == FETCH_OK
-		    && strcmp(fetchLastErrString, "Not Modified") == 0) {
-			/* HTTP Not Modified Response, return OK. */
-			r = 0;
-			goto done;
-		} else
-			goto failure;
-	}
+	
 	if (dmjob->sigint)
 		goto signal;
 
@@ -422,13 +425,10 @@ fetch(struct dmjob *dmjob)
 			 * from scratch if we want the whole file
 			 */
 			dmjob->url->offset = 0;
-			if ((f = fetchXGet(dmjob->url, &us, flags)) == NULL) {
-				warnx("%s: %s", dmreq->URL, fetchLastErrString);
-				goto failure;
-			}
 			if (dmjob->sigint)
 				goto signal;
 		}
+
 
 		/* construct a temp file name */
 		if (sb.st_size != -1 && S_ISREG(sb.st_mode)) {
@@ -448,6 +448,7 @@ fetch(struct dmjob *dmjob)
 				chmod(tmppath, sb.st_mode & ALLPERMS);
 			}
 		}
+
 		if (of == NULL)
 			of = fdopen(dmjob->ofd, "w");
 		if (of == NULL) {
@@ -485,9 +486,11 @@ fetch(struct dmjob *dmjob)
 		if ((readcnt = fread(buf, 1, size, f)) < size) {
 			if (ferror(f) && errno == EINTR && !dmjob->sigint)
 				clearerr(f);
-			else if (readcnt == 0)
+			else if (readcnt == 0) {
 				break;
+			}	
 		}
+
 
 		stat_update(&xs, count += readcnt, dmjob);
 		for (ptr = buf; readcnt > 0; ptr += wr, readcnt -= wr)
@@ -500,6 +503,7 @@ fetch(struct dmjob *dmjob)
 		if (readcnt != 0)
 			break;
 	}
+
 	if (!dmjob->sigalrm)
 		dmjob->sigalrm = ferror(f) && errno == ETIMEDOUT;
 	dmjob->siginfo_en = 0;
@@ -589,7 +593,87 @@ fetch(struct dmjob *dmjob)
 		fetchFreeURL(dmjob->url);
 	if (tmppath != NULL)
 		free(tmppath);
+
 	return (r);
+}
+
+FILE *
+dmXGet(struct dmjob *dmjob, struct url_stat *us) 
+{
+	char flags[8];
+	int ret;
+	struct dmjob tmpjob;
+	struct dmreq tmpreq;
+	struct dmreq *dmreq = dmjob->request;
+
+	/* populate tmpjob */
+
+	/* TODO : Modify stat_* to udpate jobs of progress,
+	 * right now we just put the msgs on stderr
+	 * */
+	tmpjob.client = STDERR_FILENO;
+
+	tmpjob.request = &tmpreq;
+	tmpreq.v_level = dmreq->v_level;
+ 	tmpreq.ftp_timeout = dmjob->request->ftp_timeout;
+	tmpreq.http_timeout = dmjob->request->http_timeout;
+	tmpreq.B_size = dmjob->request->B_size;
+	tmpreq.S_size = dmjob->request->S_size;
+	tmpreq.T_secs = dmjob->request->T_secs;
+	tmpreq.flags = dmjob->request->flags;
+	tmpreq.family = dmjob->request->family;
+
+	tmpreq.i_filename = (char *) Malloc(strlen(dmreq->i_filename));
+	strcpy(tmpreq.i_filename, dmreq->i_filename);
+
+	tmpreq.URL = (char *) Malloc(strlen(dmreq->URL));
+	strcpy(tmpreq.URL, dmreq->URL);
+	
+	tmpjob.url = NULL;
+	ret = mk_url(&tmpjob, flags);
+	if (ret <= 0) {
+
+	}
+
+	/* special case : -s flag
+	if (tmpreq.flags & s_FLAG) {
+		if (dmjob->timeout)
+			alarm(dmjob->timeout); 
+		r = fetchStat(dmjob->url, us, flags);
+		if (dmjob->timeout)
+			alarm(0);
+		if (dmjob->sigalrm || dmjob->sigint)
+			goto signal;
+		if (r == -1) {
+			warnx("%s", fetchLastErrString);
+			goto failure;
+		}
+		if (us->size == -1)
+			printf("Unknown\n");
+		else
+			printf("%jd\n", (intmax_t)us->size);
+		goto success;
+	}
+	*/
+	tmpreq.path = (char *) Malloc(strlen(dmreq->path) + strlen(TMP_EXT));
+	strcpy(tmpreq.path, dmreq->path);
+	strcat(tmpreq.path, TMP_EXT);
+
+	tmpjob.ofd = open(tmpreq.path, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+
+	FILE *f = fetchXGet(tmpjob.url, us, flags);
+	fetch(&tmpjob, f, *us);
+	fclose(f);
+
+	f = fopen(tmpreq.path, "r");
+
+	free(tmpjob.url->doc);
+	free(tmpjob.url);
+	free(tmpreq.i_filename);
+	free(tmpreq.URL);
+	free(tmpreq.path);
+	
+	return f;
 }
 
 static void
@@ -621,16 +705,20 @@ send_report(int sock, struct dmrep report, char op)
 	free(buf);
 }
 
+/* TODO: This handler isn't registered as SIGUSR1 interrupts the download
+ * 	 Figure out a proper way to handle this
+ * */
 void
 sig_handler(int sig)
 {
+	return;
 	struct dmjob *tmp = jobs;
 	struct dmmsg *msg;
 	int *clisig;
 	pthread_t tid = pthread_self();
 	if (sig == SIGUSR1) {
 		while (tmp != NULL) {
-			if (pthread_equal(tid, *(tmp->worker)) != 0)
+			if (pthread_equal(tid, tmp->worker) != 0)
 				break;
 			tmp = tmp->next;
 		}
@@ -641,8 +729,9 @@ sig_handler(int sig)
 			tmp->sigint = 1;
 		else if (*clisig == SIGINFO)
 			tmp->siginfo = 1;
-		else if (*clisig == SIGALRM)
-			tmp->siginfo = 1;
+		else if (*clisig == SIGALRM) {
+			tmp->sigalrm = 1;
+		}
 	}
 }
 
@@ -650,13 +739,32 @@ void *
 run_worker(struct dmjob *dmjob)
 {
 	struct dmrep report;
-	dmjob->state = RUNNING;
+	struct url_stat us;
+	int err;
+	FILE *f;
+	char *tmppath;
 
-	int err = fetch(dmjob);
+	f = dmXGet(dmjob, &us);
+	if (f == NULL) {
+		/* set error */
+		goto failure;
+	} else {
+		/* Its ok to copy from the tmp file */
+		err = fetch(dmjob, f, us);
+	}
+
+failure:
 	report.status = err;
 	report.errcode = fetchLastErrCode;
 	report.errstr = fetchLastErrString;	
 	send_report(dmjob->client, report, DMRESP);
+
+	tmppath = (char *) Malloc(strlen(dmjob->request->path) + strlen(TMP_EXT));
+	strcpy(tmppath, dmjob->request->path);
+	strcat(tmppath, TMP_EXT);
+
+	remove(tmppath);
+	free(tmppath);
 	dmjob->state = DONE;
 
 	return NULL;

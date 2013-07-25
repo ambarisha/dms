@@ -3,7 +3,7 @@
 
 #include <sys/types.h>
 
-typedef enum {RUNNING=0, DONE=1} state_t;
+typedef enum {RUNNING=0, DONE, DUPLICATE} state_t;
 
 struct dmjob {
 	int		 ofd;
@@ -13,9 +13,10 @@ struct dmjob {
 	int	 	 sigalrm;
 	int	 	 siginfo;
 	int	 	 siginfo_en;
+	unsigned	 timeout;
+	pthread_t	 worker;
 	struct dmreq 	*request;
 	struct url	*url;
-	pthread_t	*worker;
 
 	struct dmjob 	*next;
 	struct dmjob	*prev;

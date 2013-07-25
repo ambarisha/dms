@@ -200,6 +200,7 @@ handle_request(int csock)
 		dmjob = mk_dmjob(dmreq, csock);
 		jobs = add_job(jobs, dmjob);
 		pthread_create(&(dmjob->worker), NULL, run_worker, dmjob);
+		pthread_detach(dmjob->worker);
 		break;
 	default:
 		goto error;
@@ -222,16 +223,15 @@ sigint_handler(int sig)
 	exit(1); // Temporary
 }
 
-static int
+static state_t
 service_job(struct dmjob *job, fd_set *fdset)
 {
 	int ret = 0;
-	if (FD_ISSET(job->client, fdset))
+	if (FD_ISSET(job->client, fdset)) {
+		/* TODO: Worker can't handle this signal yet */
 		//pthread_kill(job->worker, SIGUSR1);
-
-	if (job->state == DONE)
-		ret = 1;
-	return (ret);
+	}
+	return (job->state);
 }
 
 static void
@@ -248,6 +248,7 @@ run_event_loop(int socket)
 
 		/* Prepare fdset and make select call */
 		FD_ZERO(&fdset);
+		maxfd = socket;
 		FD_SET(socket, &fdset);
 
 		cur = jobs;
@@ -263,9 +264,8 @@ run_event_loop(int socket)
 		cur = jobs;
 		while (cur != NULL) {
 			ret = service_job(cur, &fdset);
-			if (ret == 1) {
+			if (ret == DONE) {
 				close(cur->client);
-				pthread_join(cur->worker, &retptr);
 				jobs = rm_job(jobs, cur);
 			}
 			cur = cur->next;
@@ -280,13 +280,15 @@ run_event_loop(int socket)
 		}
 	}
 
+	/* Notify all running workers that we've to wrap up */
 	cur = jobs;
-	while (cur != NULL) {	
-		close(cur->client);
-		ret = service_job(cur, &fdset);
-		/* TODO: Force the worker to quit as well */
+	while (cur != NULL) {
+		if (cur->state == RUNNING)
+			pthread_kill(cur->worker, SIGINT);
+
+		rm_dmreq(&(cur->request));	
 		jobs = rm_job(jobs, cur);
-		cur = jobs;
+		cur = cur->next;
 	}
 }
 
