@@ -14,44 +14,13 @@
 #include "dm.h"
 #include "dms.h"
 
+static int	dm_err;
+static char	dm_errstr[512];
+
 int	 	 stop;
 struct dmjob	*jobs;
 
 void *run_worker(struct dmjob *job);
-
-static struct dmjob *
-add_job(struct dmjob *head, struct dmjob *new)
-{ 
-	new->prev = NULL;
-	new->next = NULL;
-
-	if (head == NULL)
-		return new;
-
-	head->prev = new;
-	new->next = head;	
-}
-
-static struct dmjob *
-rm_job(struct dmjob *head, struct dmjob *job)
-{
-	if (head == NULL)
-		return NULL;
-	
-	if (job == NULL)
-		return head;
-		
-	if (job->next != NULL) 
-		job->next->prev = job->prev;
-
-	if (job->prev != NULL)
-		job->prev->next = job->next;
-	
-	if (job == head) 
-		return job->next;
-
-	return head;
-}
 
 static int
 read_fd(int sock)
@@ -79,19 +48,34 @@ read_fd(int sock)
 	msg.msg_iov = iov;
 	msg.msg_iovlen = 1;
 
-	if ( (n = recvmsg(sock, &msg, 0)) <= 0)
-		return (n);
+	if ( (n = recvmsg(sock, &msg, 0)) <= 0) {
+		strcpy(dm_errstr, "Couldn't recieve output file descriptor");
+		fprintf(stderr, "read_fd: recvmsg: %s\n", strerror(errno));
+		return -1;
+	}
 
 	if ( (cmptr = CMSG_FIRSTHDR(&msg)) != NULL &&
 		cmptr->cmsg_len == CMSG_LEN(sizeof(int))) {
-		if (cmptr->cmsg_level != SOL_SOCKET)
-			/* ERROR : control level != SOL_SOCKET */;
+		if (cmptr->cmsg_level != SOL_SOCKET) {
+			strcpy(dm_errstr, "Couldn't recieve"
+					"output file descriptor");
+			fprintf(stderr, "read_fd: recvmsg:"
+					"control level != SOL_SOCKET\n");
+			return -1;
+		}
 
-		if (cmptr->cmsg_type != SCM_RIGHTS)
-			 /* ERROR : control type != SCM_RIGHTS */;
+		if (cmptr->cmsg_type != SCM_RIGHTS) {
+			strcpy(dm_errstr, "Couldn't recieve"
+					"output file descriptor");
+			fprintf(stderr, "read_fd: recvmsg:"
+					"control type != SCM_RIGHTS\n");
+			return -1;
+		}
 
 		newfd = *((int *) CMSG_DATA(cmptr));
 	} else {
+		strcpy(dm_errstr, "Couldn't recieve output file descriptor");
+		fprintf(stderr, "read_fd: Invalid control message header\n");
 		newfd = -1;
 	}
 
@@ -99,16 +83,50 @@ read_fd(int sock)
 }
 
 static struct dmjob *
+add_job(struct dmjob *head, struct dmjob *new)
+{ 
+	new->prev = NULL;
+	new->next = NULL;
+
+	if (head == NULL)
+		return new;
+
+	head->prev = new;
+	new->next = head;	
+}
+
+static struct dmjob *
+rm_job(struct dmjob *head, struct dmjob *job)
+{
+	if (job->next != NULL) 
+		job->next->prev = job->prev;
+
+	if (job->prev != NULL)
+		job->prev->next = job->next;
+	
+	if (job == head) 
+		return job->next;
+
+	return head;
+}
+
+static struct dmjob *
 mk_dmjob(struct dmreq *dmreq, int client)
 {
-	struct dmjob *dmjob = (struct dmjob *) Malloc(sizeof(struct dmjob));
+	struct dmjob *dmjob = (struct dmjob *) malloc(sizeof(struct dmjob));
+	if (dmjob == NULL) {
+		fprintf(stderr, "mk_dmjob: malloc: insufficient memory\n");
+		strcpy(dm_errstr, "Insufficient memory\n");
+	}
+
 	dmjob->request = dmreq;
+
 	dmjob->ofd = read_fd(client);
 	if (dmjob->ofd == -1) {
-		/* Handle error */
 		free(dmjob);
 		return NULL;
 	}
+
 	dmjob->client = client;
 	dmjob->sigint = 0;
 	dmjob->sigalrm = 0;
@@ -124,9 +142,13 @@ mk_dmreq(char *rcvbuf, int bufsize)
 {
 	int i = 0;
 
-	struct dmreq *dmreq = (struct dmreq *) Malloc(sizeof(struct dmreq));
-	if (dmreq == NULL) 
+	struct dmreq *dmreq = (struct dmreq *) malloc(sizeof(struct dmreq));
+	if (dmreq == NULL) {
+		fprintf(stderr, "mk_dmreq: malloc: insufficient memory\n");
+		strcpy(dm_errstr, "Insufficient memory");
 		return NULL;
+	}
+
 	memcpy(&(dmreq->v_level), rcvbuf + i, sizeof(dmreq->v_level));
 	i += sizeof(dmreq->v_level);
 
@@ -152,17 +174,38 @@ mk_dmreq(char *rcvbuf, int bufsize)
 	i += sizeof(dmreq->flags);
 
 	int sz = strlen(rcvbuf+i);
-	dmreq->i_filename = (char *) Malloc(sz);
+	dmreq->i_filename = (char *) malloc(sz);
+	if (dmreq->i_filename == NULL) {
+		fprintf(stderr, "mk_dmreq: malloc: insufficient memory\n");
+		strcpy(dm_errstr, "Insufficient memory");
+		free(dmreq);
+		return NULL;
+	}
 	strcpy(dmreq->i_filename, rcvbuf+i);
 	i += sz + 1;
 	
 	sz = strlen(rcvbuf+i);
-	dmreq->URL = (char *) Malloc(sz); 
+	dmreq->URL = (char *) malloc(sz); 
+	if (dmreq->URL == NULL) {
+		fprintf(stderr, "mk_dmreq: malloc: insufficient memory\n");
+		strcpy(dm_errstr, "Insufficient memory");
+		free(dmreq->i_filename);
+		free(dmreq);
+		return NULL;
+	}
 	strcpy(dmreq->URL, rcvbuf+i);
 	i += sz + 1;
 	
 	sz = strlen(rcvbuf+i);
-	dmreq->path = (char *) Malloc(sz);
+	dmreq->path = (char *) malloc(sz);
+	if (dmreq->path == NULL) {
+		fprintf(stderr, "mk_dmreq: malloc: insufficient memory\n");
+		strcpy(dm_errstr, "Insufficient memory");
+		free(dmreq->i_filename);
+		free(dmreq->URL);
+		free(dmreq);
+		return NULL;
+	}
 	strcpy(dmreq->path, rcvbuf+i);
 	i += sz + 1;
 	
@@ -172,11 +215,23 @@ mk_dmreq(char *rcvbuf, int bufsize)
 static void
 rm_dmreq(struct dmreq **dmreq)
 {
+	if (*dmreq == NULL)
+		return;
+
 	free((*dmreq)->i_filename);
 	free((*dmreq)->URL);
 	free((*dmreq)->path);
 	free(*dmreq);
 	*dmreq = NULL;
+}
+
+static void
+rm_dmjob(struct dmjob **dmjob)
+{
+	if (*dmjob == NULL)
+		return;
+	rm_dmreq(&((*dmjob)->request));	
+	free((*dmjob)->url);
 }
 
 static int
@@ -185,34 +240,47 @@ handle_request(int csock)
 	struct dmreq 	*dmreq;
 	struct dmmsg 	*msg;
 	struct dmjob	*dmjob;
+	struct dmrep	report;
 	int ret;
 	pid_t pid;
 
-	msg = recv_msg(csock);
+	msg = recv_dmmsg(csock);
 	if (msg == NULL) {
-		/* set dms_error */
+		report.status = -1;
+		report.errcode = FETCH_UNKNOWN;
+		report.errstr = dm_errstr;
+		send_report(csock, report);
 		return -1;
 	}
 	
 	switch (msg->op) {
 	case DMREQ:
- 		dmreq = mk_dmreq(msg->buf, msg->len);
-		dmjob = mk_dmjob(dmreq, csock);
+ 		if ((dmreq = mk_dmreq(msg->buf, msg->len)) == NULL)
+			goto error;
+
+		if ((dmjob = mk_dmjob(dmreq, csock)) == NULL)
+			goto error;
+
 		jobs = add_job(jobs, dmjob);
 		pthread_create(&(dmjob->worker), NULL, run_worker, dmjob);
 		pthread_detach(dmjob->worker);
-		break;
+		goto done;
 	default:
+		free_dmmsg(&msg);
 		goto error;
-		break;
 	}
-success:
-	ret = 0;
-	goto done;
+
 error:
+	report.status = -1;
+	report.errcode = FETCH_UNKNOWN;
+	report.errstr = dm_errstr;
+	send_report(csock, report);
+
+	rm_dmreq(&dmreq);
+	rm_dmjob(&dmjob);
 	ret = -1;	
 done:
-	free_msg(&msg);
+	free_dmmsg(&msg);
 	return ret;
 }
 
@@ -238,6 +306,7 @@ static void
 run_event_loop(int socket)
 {
 	int i, ret, maxfd = socket;
+	state_t state;
 	struct dmjob *cur;
 	void *retptr;
 	jobs = NULL;
@@ -259,14 +328,20 @@ run_event_loop(int socket)
 			cur = cur->next;
 		}
 
-		Select(maxfd + 1, &fdset, NULL, NULL, NULL);
+		ret = select(maxfd + 1, &fdset, NULL, NULL, NULL);
+		if (ret ==  -1) {
+			fprintf(stderr, "run_event_loop: "
+					"select: %s\n", strerror(errno));
+			goto wrap_up;
+		}
 
 		cur = jobs;
 		while (cur != NULL) {
-			ret = service_job(cur, &fdset);
-			if (ret == DONE) {
+			state = service_job(cur, &fdset);
+			if (state == DONE) {
 				close(cur->client);
 				jobs = rm_job(jobs, cur);
+				rm_dmjob(&cur);
 			}
 			cur = cur->next;
 		}
@@ -274,12 +349,18 @@ run_event_loop(int socket)
 		if (FD_ISSET(socket, &fdset)) {
 			struct sockaddr_un cliaddr;
 			size_t cliaddrlen = sizeof(cliaddr);
-			int csock = Accept(socket, (struct sockaddr *) &cliaddr,
+			int csock = accept(socket, (struct sockaddr *) &cliaddr,
 					&cliaddrlen);
+			if (csock == -1) {
+				fprintf(stderr, "run_event_loop: "
+					"select: %s\n", strerror(errno));
+				goto wrap_up;
+			}
 			handle_request(csock);
 		}
 	}
 
+wrap_up:
 	/* Notify all running workers that we've to wrap up */
 	cur = jobs;
 	while (cur != NULL) {
@@ -294,13 +375,30 @@ run_event_loop(int socket)
 
 int main(int argc, char **argv)
 {
-	int sock = Socket(AF_UNIX, SOCK_STREAM, 0);
+	int sock, err; 
+	sock = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (sock == -1) {
+		fprintf(stderr, "main: socket: %s\n", strerror(errno));
+		exit(1);
+	}
+
 	struct sockaddr_un sunaddr;
 	sunaddr.sun_family = AF_UNIX;
 	strcpy(sunaddr.sun_path, DMS_UDS_PATH);
-	int err = Bind(sock, (struct sockaddr *)&sunaddr, sizeof(sunaddr));
 
-	err = Listen(sock, MAX_LISTEN_QUEUE);
+	err = bind(sock, (struct sockaddr *)&sunaddr, sizeof(sunaddr));
+	if (err == -1) {
+		fprintf(stderr, "main: bind: %s\n", strerror(errno));
+		close(sock);
+		exit(1);
+	}
+
+	err = listen(sock, MAX_LISTEN_QUEUE);
+	if (err == -1) {
+		fprintf(stderr, "main: listen: %s\n", strerror(errno));
+		close(sock);
+		exit(1);
+	}
 	
 	run_event_loop(sock);
 

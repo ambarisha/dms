@@ -36,7 +36,7 @@ authenticate(struct url *url)
 	hlen = strlen(url->host) + 1;
 	bufsize += schlen + hlen + sizeof(url->port);
 
-	msg.buf = (char *) Malloc(bufsize);
+	msg.buf = (char *) malloc(bufsize);
 
 	strcpy(msg.buf, url->scheme);
 	i += schlen;
@@ -48,14 +48,14 @@ authenticate(struct url *url)
 
 	msg.op = DMAUTHREQ;
 	msg.len = bufsize;
-	send_msg(cur->client, msg);
+	send_dmmsg(cur->client, msg);
 
 	struct dmmsg *rcvmsg;
-	rcvmsg = recv_msg(cur->client);
+	rcvmsg = recv_dmmsg(cur->client);
 
 	strncpy(url->user, rcvmsg->buf, sizeof(url->user));
 	strncpy(url->pwd, rcvmsg->buf + strlen(rcvmsg->buf) + 1, sizeof(url->pwd));
-	free_msg(&rcvmsg);
+	free_dmmsg(&rcvmsg);
 }
 
 static int
@@ -67,7 +67,7 @@ compare_jobs(struct dmjob *j1, struct dmjob *j2)
 static void
 stat_send(int csock, struct xferstat *xs, int force)
 {
-	char *buf = (char *) Malloc(sizeof(struct xferstat) + sizeof(force));
+	char *buf = (char *) malloc(sizeof(struct xferstat) + sizeof(force));
 	*((int *) buf) = force;
 	
 	memcpy(buf + sizeof(force), xs, sizeof(struct xferstat));
@@ -76,7 +76,7 @@ stat_send(int csock, struct xferstat *xs, int force)
 	msg.op = DMSTAT;
 	msg.buf = buf; 
 	msg.len = sizeof(*xs) + sizeof(force);
-	send_msg(csock, msg);
+	send_dmmsg(csock, msg);
 
 	free(msg.buf);
 	return;
@@ -476,7 +476,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 
 	if (dmreq->B_size < MINBUFSIZE)
 		dmreq->B_size = MINBUFSIZE;
-	buf = (char *) Malloc(dmreq->B_size);
+	buf = (char *) malloc(dmreq->B_size);
 
 	/* suck in the data */
 	dmjob->siginfo_en = 1;
@@ -634,10 +634,10 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	tmpreq.flags = dmjob->request->flags;
 	tmpreq.family = dmjob->request->family;
 
-	tmpreq.i_filename = (char *) Malloc(strlen(dmreq->i_filename));
+	tmpreq.i_filename = (char *) malloc(strlen(dmreq->i_filename));
 	strcpy(tmpreq.i_filename, dmreq->i_filename);
 
-	tmpreq.URL = (char *) Malloc(strlen(dmreq->URL));
+	tmpreq.URL = (char *) malloc(strlen(dmreq->URL));
 	strcpy(tmpreq.URL, dmreq->URL);
 	
 	tmpjob.url = NULL;
@@ -666,7 +666,7 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 		goto success;
 	}
 	*/
-	tmpreq.path = (char *) Malloc(strlen(dmreq->path) + strlen(TMP_EXT));
+	tmpreq.path = (char *) malloc(strlen(dmreq->path) + strlen(TMP_EXT));
 	strcpy(tmpreq.path, dmreq->path);
 	strcat(tmpreq.path, TMP_EXT);
 
@@ -687,34 +687,7 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	return f;
 }
 
-static void
-send_report(int sock, struct dmrep report, char op)
-{
-	char *buf;
-	int bufsize = sizeof(report) - sizeof(report.errstr);
-	int errlen = strlen(report.errstr);
-	bufsize +=  errlen;	
 
-	buf = (char *) Malloc(bufsize);
-	int i = 0;
-	
-	memcpy(buf + i, &(report.status), sizeof(report.status));
-	i += sizeof(report.status);
-
-	memcpy(buf + i, &(report.errcode), sizeof(report.errcode));
-	i += sizeof(report.errcode);
-
-	strcpy(buf + i, report.errstr);
-	i += errlen;
-	
-	struct dmmsg msg;
-	msg.op = op;
-	msg.buf = buf;
-	msg.len = bufsize;
-	send_msg(sock, msg);
-	
-	free(buf);
-}
 
 /* TODO: This handler isn't registered as SIGUSR1 interrupts the download
  * 	 Figure out a proper way to handle this
@@ -733,7 +706,7 @@ sig_handler(int sig)
 			tmp = tmp->next;
 		}
 
-		msg = recv_msg(tmp->client);
+		msg = recv_dmmsg(tmp->client);
 		clisig = msg->buf;	
 		if (*clisig == SIGINT)
 			tmp->sigint = 1;
@@ -743,6 +716,35 @@ sig_handler(int sig)
 			tmp->sigalrm = 1;
 		}
 	}
+}
+
+int 
+send_report(int sock, struct dmrep report)
+{
+	char *buf;
+	int bufsize = sizeof(report) - sizeof(report.errstr);
+	int errlen = strlen(report.errstr);
+	bufsize +=  errlen;	
+
+	buf = (char *) malloc(bufsize);
+	int i = 0;
+	
+	memcpy(buf + i, &(report.status), sizeof(report.status));
+	i += sizeof(report.status);
+
+	memcpy(buf + i, &(report.errcode), sizeof(report.errcode));
+	i += sizeof(report.errcode);
+
+	strcpy(buf + i, report.errstr);
+	i += errlen;
+	
+	struct dmmsg msg;
+	msg.op = DMRESP;
+	msg.buf = buf;
+	msg.len = bufsize;
+	send_dmmsg(sock, msg);
+	
+	free(buf);
 }
 
 void *
@@ -789,14 +791,14 @@ run_worker(struct dmjob *dmjob)
 		report.status = err;
 		report.errcode = fetchLastErrCode;
 		report.errstr = fetchLastErrString;	
-		send_report(dmjob->client, report, DMRESP);
+		send_report(dmjob->client, report);
 
 		tmp->state = DONE;
 		tmp = tmp->next;
 	}
 	/* remove the local tmp file */
 	if (f != NULL) {
-		tmppath = (char *) Malloc(strlen(dmjob->request->path) + strlen(TMP_EXT));
+		tmppath = (char *) malloc(strlen(dmjob->request->path) + strlen(TMP_EXT));
 		strcpy(tmppath, dmjob->request->path);
 		strcat(tmppath, TMP_EXT);
 
