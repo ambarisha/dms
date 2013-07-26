@@ -58,6 +58,12 @@ authenticate(struct url *url)
 	free_msg(&rcvmsg);
 }
 
+static int
+compare_jobs(struct dmjob *j1, struct dmjob *j2)
+{
+	return strcmp(j1->request->URL, j2->request->URL);
+}
+
 static void
 stat_send(int csock, struct xferstat *xs, int force)
 {
@@ -260,6 +266,11 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 	count = 0;
 	
 	r = mk_url(dmjob, flags);
+
+	/* Initialize signal flags */
+	dmjob->sigint = 0;
+	dmjob->sigalrm = 0;
+	dmjob->siginfo = 0;
 
 	/* Set timeout */
 	if (strcmp(dmjob->url->scheme, SCHEME_FTP) == 0)
@@ -711,7 +722,6 @@ send_report(int sock, struct dmrep report, char op)
 void
 sig_handler(int sig)
 {
-	return;
 	struct dmjob *tmp = jobs;
 	struct dmmsg *msg;
 	int *clisig;
@@ -739,33 +749,61 @@ void *
 run_worker(struct dmjob *dmjob)
 {
 	struct dmrep report;
+	struct dmjob *tmp;
 	struct url_stat us;
 	int err;
 	FILE *f;
 	char *tmppath;
+	char flags[8];
 
-	f = dmXGet(dmjob, &us);
-	if (f == NULL) {
-		/* set error */
-		goto failure;
-	} else {
-		/* Its ok to copy from the tmp file */
-		err = fetch(dmjob, f, us);
+	/* check if this is a duplicate */
+	mk_url(dmjob, flags);	
+	tmp = jobs;
+	while (tmp != NULL) {
+		if (tmp != dmjob && compare_jobs(tmp, dmjob) == 0) {
+			dmjob->state = DUPLICATE;
+			dmjob->worker = tmp->worker;
+			return NULL;
+		}
+		tmp = tmp->next;
 	}
 
-failure:
-	report.status = err;
-	report.errcode = fetchLastErrCode;
-	report.errstr = fetchLastErrString;	
-	send_report(dmjob->client, report, DMRESP);
+	/* fetch the remote file into a local tmp file */
+	f = dmXGet(dmjob, &us);
 
-	tmppath = (char *) Malloc(strlen(dmjob->request->path) + strlen(TMP_EXT));
-	strcpy(tmppath, dmjob->request->path);
-	strcat(tmppath, TMP_EXT);
+	/* Serve any outstanding requests from the local tmp file */
+	tmp = jobs;
+	while (tmp != NULL) {
+		if (compare_jobs(tmp, dmjob) != 0) {
+			tmp = tmp->next;
+			continue;
+		}
 
-	remove(tmppath);
-	free(tmppath);
-	dmjob->state = DONE;
+		if (f == NULL) {
+			err = -1;
+		} else {
+			fseek(f, 0, SEEK_SET);
+			err = fetch(dmjob, f, us);
+		}
 
-	return NULL;
+		report.status = err;
+		report.errcode = fetchLastErrCode;
+		report.errstr = fetchLastErrString;	
+		send_report(dmjob->client, report, DMRESP);
+
+		tmp->state = DONE;
+		tmp = tmp->next;
+	}
+	/* remove the local tmp file */
+	if (f != NULL) {
+		tmppath = (char *) Malloc(strlen(dmjob->request->path) + strlen(TMP_EXT));
+		strcpy(tmppath, dmjob->request->path);
+		strcat(tmppath, TMP_EXT);
+
+		remove(tmppath);
+		free(tmppath);
+	}
+	
+	/* TODO : What is this? Yew!! */
+	sleep(10);
 }

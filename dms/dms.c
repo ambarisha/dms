@@ -258,7 +258,7 @@ run_event_loop(int socket)
 				maxfd = cur->client;
 			cur = cur->next;
 		}
-		
+
 		Select(maxfd + 1, &fdset, NULL, NULL, NULL);
 
 		cur = jobs;
