@@ -23,17 +23,8 @@ authenticate(struct url *url)
 {
 	struct dmmsg msg;
 	struct dmjob *cur = jobs;
-	while (cur != NULL) {
-		/* TODO: May be a more thorough comparison? */
-		if (cur->url == url)
-			break;
-		cur = cur->next;
-	}
-
-	if (cur == NULL)
-		return -1; // Todo: Verify this
-
 	int bufsize = 0, i = 0, schlen, hlen;
+
 	schlen = strlen(url->scheme) + 1;
 	hlen = strlen(url->host) + 1;
 	bufsize += schlen + hlen + sizeof(url->port);
@@ -54,24 +45,22 @@ authenticate(struct url *url)
 
 	msg.op = DMAUTHREQ;
 	msg.len = bufsize;
-	ret = send_dmmsg(cur->client, msg);
-	if (ret == -1) {
-		free(msg.buf);
-		return -1;
+
+	while (cur != NULL) {
+		/* TODO: May be a more thorough comparison? */
+		if (cur->url != url) {
+			cur = cur->next;
+			continue;
+		}
+
+		
+		/* TODO: How do we figure out which request's 
+		 * authentication credentials to use ???
+		 * */
+
 	}
 
-	struct dmmsg *rcvmsg;
-	rcvmsg = recv_dmmsg(cur->client);
-	if (rcvmsg == NULL) { 
-		free(msg.buf);
-		return -1;
-	}
-
-	strncpy(url->user, rcvmsg->buf, sizeof(url->user));
-	strncpy(url->pwd, rcvmsg->buf + strlen(rcvmsg->buf) + 1, sizeof(url->pwd));
-	free_dmmsg(&rcvmsg);
-
-	return 1; // TODO: Verify this 
+	return 1;
 }
 
 static int
