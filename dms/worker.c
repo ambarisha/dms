@@ -13,6 +13,7 @@
 #include "dm.h"
 
 
+static const char *prefixes = " kMGTP";
 extern struct dmjob 	*jobs;
 
 #define	TMP_EXT		".tmp"
@@ -23,6 +24,7 @@ authenticate(struct url *url)
 	struct dmmsg msg;
 	struct dmjob *cur = jobs;
 	while (cur != NULL) {
+		/* TODO: May be a more thorough comparison? */
 		if (cur->url == url)
 			break;
 		cur = cur->next;
@@ -37,6 +39,10 @@ authenticate(struct url *url)
 	bufsize += schlen + hlen + sizeof(url->port);
 
 	msg.buf = (char *) malloc(bufsize);
+	if (msg.buf == NULL) {
+		fprintf(stderr, "fetch: authenticate: Insufficient memory\n");
+		return -1;
+	}
 
 	strcpy(msg.buf, url->scheme);
 	i += schlen;
@@ -48,14 +54,24 @@ authenticate(struct url *url)
 
 	msg.op = DMAUTHREQ;
 	msg.len = bufsize;
-	send_dmmsg(cur->client, msg);
+	ret = send_dmmsg(cur->client, msg);
+	if (ret == -1) {
+		free(msg.buf);
+		return -1;
+	}
 
 	struct dmmsg *rcvmsg;
 	rcvmsg = recv_dmmsg(cur->client);
+	if (rcvmsg == NULL) { 
+		free(msg.buf);
+		return -1;
+	}
 
 	strncpy(url->user, rcvmsg->buf, sizeof(url->user));
 	strncpy(url->pwd, rcvmsg->buf + strlen(rcvmsg->buf) + 1, sizeof(url->pwd));
 	free_dmmsg(&rcvmsg);
+
+	return 1; // TODO: Verify this 
 }
 
 static int
@@ -68,6 +84,11 @@ static void
 stat_send(int csock, struct xferstat *xs, int force)
 {
 	char *buf = (char *) malloc(sizeof(struct xferstat) + sizeof(force));
+	if (buf == NULL) {
+		fprintf(stderr,  "stat_send: Insufficient memory\n");
+		return;
+	}
+
 	*((int *) buf) = force;
 	
 	memcpy(buf + sizeof(force), xs, sizeof(struct xferstat));
@@ -77,12 +98,10 @@ stat_send(int csock, struct xferstat *xs, int force)
 	msg.buf = buf; 
 	msg.len = sizeof(*xs) + sizeof(force);
 	send_dmmsg(csock, msg);
-
-	free(msg.buf);
+	free(buf);
 	return;
 }
 
-static const char *prefixes = " kMGTP";
 static const char *
 stat_bytes(off_t bytes)
 {
@@ -171,7 +190,7 @@ mk_url(struct dmjob *dmjob, char *flags)
 
 	/* parse URL */
 	if (*dmreq->URL == '\0') {
-		warnx("empty URL");
+		fprintf(stderr, "warning: mk_url: URL empty\n");
 		goto failure;
 	}
 	if ((dmjob->url = fetchParseURL(dmreq->URL)) == NULL) {
@@ -230,6 +249,7 @@ mk_url(struct dmjob *dmjob, char *flags)
 
 	/* set the protocol timeout. */
 	fetchTimeout = dmjob->timeout;
+	r = 0;
 	goto success;
 
 signal:
@@ -238,6 +258,7 @@ failure:
 	free(dmjob->url->doc);
 	free(dmjob->url);
 	dmjob->url = NULL;
+	r = -1;
 success:
 	return (r);
 }
@@ -266,6 +287,8 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 	count = 0;
 	
 	r = mk_url(dmjob, flags);
+	if (r == -1)
+		return -1;
 
 	/* Initialize signal flags */
 	dmjob->sigint = 0;
@@ -635,15 +658,28 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	tmpreq.family = dmjob->request->family;
 
 	tmpreq.i_filename = (char *) malloc(strlen(dmreq->i_filename));
+	if (tmpreq.i_filename == NULL) {
+		fprintf(stderr, "dmXGet: Insufficient memory\n");
+		return NULL;
+	}
+
 	strcpy(tmpreq.i_filename, dmreq->i_filename);
 
 	tmpreq.URL = (char *) malloc(strlen(dmreq->URL));
+	if (tmpreq.URL == NULL) {
+		fprintf(stderr, "dmXGet: Insufficient memory\n");
+		free(tmpreq.i_filename);
+		return NULL;
+	}
+
 	strcpy(tmpreq.URL, dmreq->URL);
 	
 	tmpjob.url = NULL;
 	ret = mk_url(&tmpjob, flags);
-	if (ret <= 0) {
-
+	if (ret == -1) {
+		free(tmpreq.i_filename);
+		free(tmpreq.URL);
+		return NULL;
 	}
 
 	/* special case : -s flag
@@ -667,6 +703,13 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	}
 	*/
 	tmpreq.path = (char *) malloc(strlen(dmreq->path) + strlen(TMP_EXT));
+	if (tmpreq.path == NULL) {
+		fprintf(stderr, "dmXGet: Insufficient memory\n");
+		free(tmpreq.i_filename);
+		free(tmpreq.path);
+		free(tmpreq.URL);
+		return NULL;
+	}
 	strcpy(tmpreq.path, dmreq->path);
 	strcat(tmpreq.path, TMP_EXT);
 
@@ -686,8 +729,6 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	
 	return f;
 }
-
-
 
 /* TODO: This handler isn't registered as SIGUSR1 interrupts the download
  * 	 Figure out a proper way to handle this
@@ -722,12 +763,16 @@ int
 send_report(int sock, struct dmrep report)
 {
 	char *buf;
+	int i = 0;
 	int bufsize = sizeof(report) - sizeof(report.errstr);
 	int errlen = strlen(report.errstr);
-	bufsize +=  errlen;	
 
+	bufsize +=  errlen;	
 	buf = (char *) malloc(bufsize);
-	int i = 0;
+	if (buf == NULL) {
+		fprintf(stderr, "send_report: Insufficient memory\n");
+		return -1;
+	}
 	
 	memcpy(buf + i, &(report.status), sizeof(report.status));
 	i += sizeof(report.status);
@@ -753,13 +798,13 @@ run_worker(struct dmjob *dmjob)
 	struct dmrep report;
 	struct dmjob *tmp;
 	struct url_stat us;
-	int err;
+	int ret;
 	FILE *f;
 	char *tmppath;
 	char flags[8];
 
 	/* check if this is a duplicate */
-	mk_url(dmjob, flags);	
+	ret = mk_url(dmjob, flags);	
 	tmp = jobs;
 	while (tmp != NULL) {
 		if (tmp != dmjob && compare_jobs(tmp, dmjob) == 0) {
@@ -782,13 +827,13 @@ run_worker(struct dmjob *dmjob)
 		}
 
 		if (f == NULL) {
-			err = -1;
+			ret = -1;
 		} else {
 			fseek(f, 0, SEEK_SET);
-			err = fetch(dmjob, f, us);
+			ret = fetch(dmjob, f, us);
 		}
 
-		report.status = err;
+		report.status = ret;
 		report.errcode = fetchLastErrCode;
 		report.errstr = fetchLastErrString;	
 		send_report(dmjob->client, report);
@@ -796,6 +841,7 @@ run_worker(struct dmjob *dmjob)
 		tmp->state = DONE;
 		tmp = tmp->next;
 	}
+
 	/* remove the local tmp file */
 	if (f != NULL) {
 		tmppath = (char *) malloc(strlen(dmjob->request->path) + strlen(TMP_EXT));
