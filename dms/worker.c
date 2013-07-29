@@ -70,8 +70,12 @@ compare_jobs(struct dmjob *j1, struct dmjob *j2)
 }
 
 static void
-stat_send(int csock, struct xferstat *xs, int force)
+stat_send(struct xferstat *xs, int force)
 {
+	struct dmjob *cur;
+	struct dmmsg msg;
+	pthread_t  self = pthread_self();
+
 	char *buf = (char *) malloc(sizeof(struct xferstat) + sizeof(force));
 	if (buf == NULL) {
 		fprintf(stderr,  "stat_send: Insufficient memory\n");
@@ -82,11 +86,17 @@ stat_send(int csock, struct xferstat *xs, int force)
 	
 	memcpy(buf + sizeof(force), xs, sizeof(struct xferstat));
 
-	struct dmmsg msg;
 	msg.op = DMSTAT;
 	msg.buf = buf; 
 	msg.len = sizeof(*xs) + sizeof(force);
-	send_dmmsg(csock, msg);
+	cur = jobs;
+
+	while (cur != NULL) {
+		if (pthread_equal(self, cur->worker) != 0)	
+			send_dmmsg(cur->client, msg);
+		cur = cur->next;
+	}
+
 	free(buf);
 	return;
 }
@@ -135,7 +145,7 @@ stat_start(struct xferstat *xs, const char *name, off_t size,
 	xs->rcvd = offset;
 	xs->lastrcvd = offset;
 	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0)
-		stat_send(dmjob->client, xs, 1);
+		stat_send(xs, 1);
 	else if (dmjob->request->v_level > 0)
 		fprintf(stderr, "%-46s", xs->name);
 }
@@ -145,7 +155,7 @@ stat_end(struct xferstat *xs, struct dmjob *dmjob)
 {
 	gettimeofday(&xs->last, NULL);
 	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0) {
-		stat_send(dmjob->client, xs, 2);
+		stat_send(xs, 2);
 		putc('\n', stderr);
 	} else if (dmjob->request->v_level > 0) {
 		fprintf(stderr, "        %s %s\n",
@@ -158,7 +168,7 @@ stat_update(struct xferstat *xs, off_t rcvd, struct dmjob *dmjob)
 {
 	xs->rcvd = rcvd;
 	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0)
-		stat_send(dmjob->client, xs, 0);
+		stat_send(xs, 0);
 }
 
 static int
@@ -803,6 +813,8 @@ run_worker(struct dmjob *dmjob)
 		}
 		tmp = tmp->next;
 	}
+
+	dmjob->worker = pthread_self();
 
 	/* fetch the remote file into a local tmp file */
 	f = dmXGet(dmjob, &us);
