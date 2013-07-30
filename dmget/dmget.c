@@ -25,17 +25,7 @@ static int 	 sigint;
 static int 	 siginfo;
 
 static int 	 dmg_error;
-static char	*dmg_errstr;
-
-static void *
-Malloc(size_t size)
-{
-	void *ptr = malloc(size);
-	if (ptr == NULL) {
-		/* Notifiy ENOMEM and exit gracefully */
-	}
-	return ptr;
-}
+static char	 dmg_errstr[512];
 
 void dmSigHandler(int signal)
 {
@@ -59,7 +49,12 @@ sigsafe_write(int sock, char *buf, int bufsize)
 	sigaddset(&sm, SIGINFO);
 
 	sigprocmask(SIG_BLOCK, &sm, NULL);
-	ret = Write(sock, buf, bufsize);
+	ret = write(sock, buf, bufsize);
+	if (ret == -1) {
+		fprintf(stderr, "dmget: Write failed (%s)\n", strerror(errno));
+		strcpy(dmg_errstr, "Write failed - ");
+		strcat(dmg_errstr, strerror(errno));
+	}
 	sigprocmask(SIG_UNBLOCK, &sm, NULL);
 
 	return ret;
@@ -73,18 +68,18 @@ sigsafe_read(int sock, char *buf, int bufsize)
 	/* If the first read was an error return 
 	 * because that could be because of a signal
 	 * */
-	ret = Read(sock, buf, bufsize);
-	if (ret == -1 || ret == 0) 
+	ret = read(sock, buf, bufsize);
+	if (ret == -1 || ret == 0) {
+		fprintf(stderr, "dmget: read failed (%s)\n", strerror(errno));
 		return ret;
-		
+	}
+
 	/* But if we've already started reading, we keep reading */
 	while ((ret == -1 && errno == EINTR) || n > 0 && n < bufsize) {
 		ret = read(sock, buf + n, bufsize - n);	
 		if (ret == 0) {
-			/* Read ended prematurely
-			 * Set dmg_error appropriately and return
-			 */
-
+			fprintf(stderr, "dmget: Remote end closed connection\n");
+			strcpy(dmg_errstr, "Remote end closed connection");
 			break;
 		}
 		
@@ -94,6 +89,7 @@ sigsafe_read(int sock, char *buf, int bufsize)
 
 	if (ret != -1)
 		return(n);
+
 	return(ret);
 }
 
@@ -109,7 +105,12 @@ mk_reqbuf(struct dmreq dmreq, char **reqbuf, char op)
 	bufsize += strlen(dmreq.URL) + 1;
 	bufsize += strlen(dmreq.path) + 1;
 
-	*reqbuf = (char *) Malloc(bufsize);
+	*reqbuf = (char *) malloc(bufsize);
+	if (*reqbuf == NULL) {
+		fprintf(stderr, "dmget: Insufficient memory");
+		strcpy(dmg_errstr, "Insufficient memory");
+		return -1;
+	}
 	
 	memcpy(*reqbuf, &bufsize, sizeof(bufsize));
 	i += sizeof(bufsize);
@@ -159,7 +160,11 @@ mk_dmres(char *buf, int buflen)
 	int i = 0, len;
 	struct dmres *dmres;
 
-	dmres = (struct dmres*) Malloc(sizeof(struct dmres));
+	dmres = (struct dmres*) malloc(sizeof(struct dmres));
+	if (dmres == NULL) {
+		fprintf(stderr, "dmget: mk_dmres: Insufficient memory\n");
+		return NULL;
+	}
 
 	memcpy(&(dmres->status), buf + i, sizeof(dmres->status));
 	i += sizeof(dmres->status);
@@ -168,7 +173,12 @@ mk_dmres(char *buf, int buflen)
 	i += sizeof(dmres->errcode);
 
 	len = strlen(buf + i);
-	dmres->errstr = (char *) Malloc(len);
+	dmres->errstr = (char *) malloc(len);
+	if (dmres->errstr == NULL) {
+		fprintf(stderr, "dmget: mk_dmres: Insufficient memory\n");
+		free(dmres);
+		return NULL;
+	}
 	strcpy(dmres->errstr, buf + i);
 
 	return dmres;
@@ -189,7 +199,7 @@ send_signal(int sock)
 	msg.op = DMSIG;
 	msg.buf = &signal;
 	msg.len = sizeof(signal);
-	return (send_msg(sock, msg));
+	return (send_dmmsg(sock, msg));
 }
 
 static int
@@ -221,57 +231,73 @@ write_fd(int sock, int fd)
 	*((int *) CMSG_DATA(cmptr)) = fd;
 
 	ret = sendmsg(sock, &msg, 0);
-	if (ret == -1)
-		return (-1);
-	else
-		return (0);
-}
-
-static int
-Write_fd(int sock, int fd)
-{
-	int ret = write_fd(sock, fd);
 	if (ret == -1) {
-		perror("Write_fd():");
-	} else {
-		printf("Write_fd(): Success\n");
-	}
+		fprintf(stderr, "dmget: Sending local file fd to daemon failed\n");
+		return (-1);
+	} 
+
+	return (0);
 }
 
 static int
 send_request(int sock, struct dmreq dmreq)
 {
 	char *reqbuf;
-	int bufsize, err, fd;
+	int bufsize, ret, fd;
 
 	bufsize = mk_reqbuf(dmreq, &reqbuf, DMREQ);
-	err = sigsafe_write(sock, reqbuf, bufsize);
+	if (bufsize == -1)
+		return -1;
+
+	ret = sigsafe_write(sock, reqbuf, bufsize);
+	free(reqbuf);
+
+	if (ret == -1)
+		return -1;
 
 	if (dmreq.flags & O_STDOUT)
 		fd = STDOUT_FILENO;
 	else
 		fd = open(dmreq.path, O_CREAT|O_RDWR|O_TRUNC, S_IRUSR|S_IWUSR);
 
-	Write_fd(sock, fd);
-	close(fd);	
+	ret = write_fd(sock, fd);
 
-	free(reqbuf);
-	return(err);
+	if (!(dmreq.flags & O_STDOUT))
+		close(fd);	
+
+	return(ret);
 }
 
 struct dmauth *
 mk_dmauth(char *buf, int bufsize)
 {
 	int i = 0, len;
-	struct dmauth *dmauth = (struct dmauth *) Malloc(sizeof(struct dmauth));
+	struct dmauth *dmauth = (struct dmauth *) malloc(sizeof(struct dmauth));
+	if (dmauth == NULL) {
+		fprintf(stderr, "dmget: mk_dmauth: Insufficient memory\n");
+		return NULL;
+	}
 
 	len = strlen(buf + i);	
-	dmauth->scheme = (char *) Malloc(len + 1);
+	dmauth->scheme = (char *) malloc(len + 1);
+	if (dmauth->scheme == NULL) {
+		fprintf(stderr, "dmget: mk_dmauth: Insufficient memory\n");
+		free(dmauth);
+		return NULL;
+	}
+
 	strncpy(dmauth->scheme, buf + i, len);
 	i += len + 1;
 
 	len = strlen(buf + i);
-	dmauth->host = (char *) Malloc(len + 1);
+	dmauth->host = (char *) malloc(len + 1);
+	if (dmauth->host == NULL) {
+		fprintf(stderr, "dmget: mk_dmauth: Insufficient memory\n");
+		free(dmauth->scheme);
+		free(dmauth);
+		return NULL;
+	}
+
 	strncpy(dmauth->host, buf + i, len);
 	i += len + 1;
 
@@ -293,18 +319,26 @@ rm_dmauth(struct dmauth **dmauth)
 static int
 send_dmauth(int sock, struct dmauth *dmauth)
 {
-	int ulen = strlen(dmauth->user) + 1;
-	int bufsize = ulen + strlen(dmauth->pwd) + 1;
-	char *buf = (char *) Malloc(bufsize);
+	int ret, ulen, bufsize;
+	char *buf;
+	struct dmmsg msg;
+	
+	ulen = strlen(dmauth->user) + 1;
+	bufsize = ulen + strlen(dmauth->pwd) + 1;
 
+	buf = (char *) malloc(bufsize);
+	if (buf == NULL) {
+		fprintf(stderr, "dmget: send_dmauth: Insufficient memory\n");
+		return -1;
+	}
 	strcpy(buf, dmauth->user);
 	strcpy(buf + ulen, dmauth->user);
 
-	struct dmmsg msg;
 	msg.op = DMAUTHRESP;
 	msg.buf = buf;
 	msg.len = bufsize;
-	send_msg(sock, msg);
+	ret = send_dmmsg(sock, msg);
+	return (ret);	
 }
 
 int
@@ -315,20 +349,33 @@ dmget(struct dmreq dmreq)
 	struct dmres *dmres;
 	struct xferstat xs;
 	struct dmauth *dmauth;
-	sock = Socket(AF_UNIX, SOCK_STREAM, 0);
+
+	sock = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (sock == -1) {
+		fprintf(stderr, "dmget: Could not create socket"
+				" (%s)\n", strerror(errno));
+		return -1;
+	}
 
 	dms_addr.sun_family = AF_UNIX;
 	strncpy(dms_addr.sun_path, DMS_UDS_PATH, sizeof(dms_addr.sun_path));
-	err = Connect(sock, (struct sockaddr *) &dms_addr, sizeof(dms_addr));
+	ret = connect(sock, (struct sockaddr *) &dms_addr, sizeof(dms_addr));
+	if (ret == -1) {
+		fprintf(stderr, "dmget: Could not connect to daemon"
+				" (%s)\n", strerror(errno));
+		return -1;
+	}
 
 	if (siginfo || sigint) 
 		goto signal;
 
-	send_request(sock, dmreq);
+	ret = send_request(sock, dmreq);
+	if (ret == -1)
+		return -1;
 
 	while (!sigint) {
 		struct dmmsg *msg;
-		msg = recv_msg(sock);				
+		msg = recv_dmmsg(sock);				
 		if (msg == NULL) {
 			goto failure;
 		}
@@ -341,7 +388,7 @@ dmget(struct dmreq dmreq)
 		switch(msg->op) {
 		case DMRESP:
 			dmres = mk_dmres(msg->buf, msg->len);
-			free_msg(&msg);
+			free_dmmsg(&msg);
 			if (dmres->status == 0){
 				/* set dmLastErr* */
 				rm_dmres(&dmres);
@@ -353,16 +400,23 @@ dmget(struct dmreq dmreq)
 		case DMSTAT:
 			force = *((int *)(msg->buf));
 			memcpy(&xs, (msg->buf) + sizeof(force), sizeof(xs));
-			free_msg(&msg);
+			free_dmmsg(&msg);
 			dmStatDisplayMethod(&xs, force);
 			break;
 		case DMAUTHREQ:
 			dmauth = mk_dmauth(msg->buf, msg->len);
-			if (dmAuthMethod(dmauth) == -1) {
-				
+			ret = dmAuthMethod(dmauth);
+			if (ret == -1) {
+				fprintf(stderr, "dmget: Authentication failed\n");
+				strcpy(dmauth->user, "");
+				strcpy(dmauth->pwd, "");
 			}
+
 			send_dmauth(sock, dmauth);
 			rm_dmauth(&dmauth);
+
+			if (ret == -1)
+				goto failure;
 			break;
 		default:
 			break;
