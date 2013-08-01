@@ -17,8 +17,9 @@
 static int	dm_err;
 static char	dm_errstr[512];
 
-int	 	 stop;
-struct dmjob	*jobs;
+int	 	 	 stop;
+struct dmjob		*jobs;
+pthread_mutex_t	 job_queue_mutex;
 
 void *run_worker(struct dmjob *job);
 
@@ -261,7 +262,25 @@ handle_request(int csock)
 		if ((dmjob = mk_dmjob(dmreq, csock)) == NULL)
 			goto error;
 
+		/* Acquire job queue lock */
+		ret = pthread_mutex_lock(&job_queue_mutex);
+		if (ret == -1) {
+			fprintf(stderr, "handle_request: Attempt to acquire"
+					" job queue mutex failed\n");
+			goto error;
+		}
+
 		jobs = add_job(jobs, dmjob);
+
+		ret = pthread_mutex_unlock(&job_queue_mutex);
+		if (ret == -1) {
+			fprintf(stderr, "handle_request: Couldn't release "
+					"job queue lock\n");
+
+			goto error;
+		}
+		/* Job queue lock released */
+
 		pthread_create(&(dmjob->worker), NULL, run_worker, dmjob);
 		pthread_detach(dmjob->worker);
 		goto done;
@@ -310,6 +329,7 @@ run_event_loop(int socket)
 	struct dmjob *cur;
 	void *retptr;
 	jobs = NULL;
+	job_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 	fd_set fdset;
 
 	signal(SIGINT, sigint_handler);
@@ -320,6 +340,14 @@ run_event_loop(int socket)
 		maxfd = socket;
 		FD_SET(socket, &fdset);
 
+		/* Acquire job queue lock */
+		ret = pthread_mutex_lock(&job_queue_mutex);
+		if (ret == -1) {
+			fprintf(stderr, "handle_request: Attempt to acquire"
+					" job queue mutex failed\n");
+			return -1;
+		}
+
 		cur = jobs;
 		while (cur != NULL) {
 			FD_SET(cur->client, &fdset);
@@ -328,11 +356,28 @@ run_event_loop(int socket)
 			cur = cur->next;
 		}
 
+		ret = pthread_mutex_unlock(&job_queue_mutex);
+		if (ret == -1) {
+			fprintf(stderr, "handle_request: Couldn't release "
+					"job queue lock\n");
+
+			return -1;
+		}
+		/* Job queue lock released */
+
 		ret = select(maxfd + 1, &fdset, NULL, NULL, NULL);
 		if (ret ==  -1) {
 			fprintf(stderr, "run_event_loop: "
 					"select: %s\n", strerror(errno));
 			goto wrap_up;
+		}
+
+		/* Acquire job queue lock */
+		ret = pthread_mutex_lock(&job_queue_mutex);
+		if (ret == -1) {
+			fprintf(stderr, "handle_request: Attempt to acquire"
+					" job queue mutex failed\n");
+			return -1;
 		}
 
 		cur = jobs;
@@ -345,6 +390,15 @@ run_event_loop(int socket)
 			}
 			cur = cur->next;
 		}
+
+		ret = pthread_mutex_unlock(&job_queue_mutex);
+		if (ret == -1) {
+			fprintf(stderr, "handle_request: Couldn't release "
+					"job queue lock\n");
+
+			return -1;
+		}
+		/* Job queue lock released */
 
 		if (FD_ISSET(socket, &fdset)) {
 			struct sockaddr_un cliaddr;
@@ -362,6 +416,14 @@ run_event_loop(int socket)
 
 wrap_up:
 	/* Notify all running workers that we've to wrap up */
+	/* Acquire job queue lock */
+	ret = pthread_mutex_lock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Attempt to acquire"
+				" job queue mutex failed\n");
+		return -1;
+	}
+
 	cur = jobs;
 	while (cur != NULL) {
 		if (cur->state == RUNNING)
@@ -371,6 +433,16 @@ wrap_up:
 		jobs = rm_job(jobs, cur);
 		cur = cur->next;
 	}
+
+	ret = pthread_mutex_unlock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Couldn't release "
+				"job queue lock\n");
+
+		return -1;
+	}
+	/* Job queue lock released */
+
 }
 
 int main(int argc, char **argv)

@@ -13,8 +13,9 @@
 #include "dm.h"
 
 
-static const char *prefixes = " kMGTP";
+static const char 	*prefixes = " kMGTP";
 extern struct dmjob 	*jobs;
+extern pthread_mutex_t	 job_queue_mutex;
 
 #define	TMP_EXT		".tmp"
 
@@ -22,8 +23,8 @@ static int
 authenticate(struct url *url)
 {
 	struct dmmsg msg;
-	struct dmjob *cur = jobs;
-	int bufsize = 0, i = 0, schlen, hlen;
+	struct dmjob *cur;
+	int bufsize = 0, i = 0, schlen, hlen, ret;
 
 	schlen = strlen(url->scheme) + 1;
 	hlen = strlen(url->host) + 1;
@@ -46,6 +47,15 @@ authenticate(struct url *url)
 	msg.op = DMAUTHREQ;
 	msg.len = bufsize;
 
+	/* Acquire job queue lock */
+	ret = pthread_mutex_lock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Attempt to acquire"
+				" job queue mutex failed\n");
+		return -1;
+	}
+
+	cur = jobs;
 	while (cur != NULL) {
 		/* TODO: May be a more thorough comparison? */
 		if (cur->url != url) {
@@ -53,12 +63,21 @@ authenticate(struct url *url)
 			continue;
 		}
 
-		
+
 		/* TODO: How do we figure out which request's 
 		 * authentication credentials to use ???
 		 * */
 
 	}
+
+	ret = pthread_mutex_unlock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Couldn't release "
+				"job queue lock\n");
+
+		return -1;
+	}
+	/* Job queue lock released */
 
 	return 1;
 }
@@ -72,6 +91,7 @@ compare_jobs(struct dmjob *j1, struct dmjob *j2)
 static void
 stat_send(struct xferstat *xs, int force)
 {
+	int ret;
 	struct dmjob *cur;
 	struct dmmsg msg;
 	pthread_t  self = pthread_self();
@@ -89,14 +109,30 @@ stat_send(struct xferstat *xs, int force)
 	msg.op = DMSTAT;
 	msg.buf = buf; 
 	msg.len = sizeof(*xs) + sizeof(force);
-	cur = jobs;
 
+	/* Acquire job queue lock */
+	ret = pthread_mutex_lock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Attempt to acquire"
+				" job queue mutex failed\n");
+		goto done;
+	}
+
+	cur = jobs;
 	while (cur != NULL) {
 		if (pthread_equal(self, cur->worker) != 0)	
 			send_dmmsg(cur->client, msg);
 		cur = cur->next;
 	}
 
+	ret = pthread_mutex_unlock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Couldn't release "
+				"job queue lock\n");
+	}
+	/* Job queue lock released */
+
+done:
 	free(buf);
 	return;
 }
@@ -740,6 +776,7 @@ sig_handler(int sig)
 	int *clisig;
 	pthread_t tid = pthread_self();
 	if (sig == SIGUSR1) {
+		/* TODO: Umm...Locking? */
 		while (tmp != NULL) {
 			if (pthread_equal(tid, tmp->worker) != 0)
 				break;
@@ -802,8 +839,14 @@ run_worker(struct dmjob *dmjob)
 	char *tmppath;
 	char flags[8];
 
-	/* check if this is a duplicate */
-	ret = mk_url(dmjob, flags);	
+	/* Acquire job queue lock */
+	ret = pthread_mutex_lock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Attempt to acquire"
+				" job queue mutex failed\n");
+		return -1;
+	}
+
 	tmp = jobs;
 	while (tmp != NULL) {
 		if (tmp != dmjob && compare_jobs(tmp, dmjob) == 0) {
@@ -814,10 +857,29 @@ run_worker(struct dmjob *dmjob)
 		tmp = tmp->next;
 	}
 
+	ret = pthread_mutex_unlock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Couldn't release "
+				"job queue lock\n");
+
+		return -1;
+	}
+	/* Job queue lock released */
+
+	/* check if this is a duplicate */
+	ret = mk_url(dmjob, flags);	
 	dmjob->worker = pthread_self();
 
 	/* fetch the remote file into a local tmp file */
 	f = dmXGet(dmjob, &us);
+
+	/* Acquire job queue lock */
+	ret = pthread_mutex_lock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Attempt to acquire"
+				" job queue mutex failed\n");
+		return -1;
+	}
 
 	/* Serve any outstanding requests from the local tmp file */
 	tmp = jobs;
@@ -842,6 +904,15 @@ run_worker(struct dmjob *dmjob)
 		tmp->state = DONE;
 		tmp = tmp->next;
 	}
+
+	ret = pthread_mutex_unlock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Couldn't release "
+				"job queue lock\n");
+
+		return -1;
+	}
+	/* Job queue lock released */
 
 	/* remove the local tmp file */
 	if (f != NULL) {
