@@ -96,11 +96,24 @@ sigsafe_read(int sock, char *buf, int bufsize)
 static int
 mk_reqbuf(struct dmreq dmreq, char **reqbuf, char op)
 {
-	int bufsize = 0, i = 0;
+	int bufsize = 0, i = 0, csumlen = 0;
+
+	switch(dmreq.chksum_type) {
+		case SHA1_CHKSUM:
+			csumlen = SHA_DIGEST_LENGTH;
+			break;
+		case MD5_CHKSUM:
+			csumlen = MD5_DIGEST_LENGTH;
+			break;
+		default:
+			break;
+	}
 
 	bufsize += sizeof(bufsize); 				// Buffer size
 	bufsize += 1; 						// Opcode
-	bufsize += sizeof(struct dmreq) - (3 * sizeof(char*)); 	// fix sizeof(dmreq)
+	bufsize += sizeof(struct dmreq);
+	bufsize -= (3 * sizeof(char*)) + sizeof(dmreq.chksum); 	// fix sizeof(dmreq)
+	bufsize += csumlen;
 	bufsize += strlen(dmreq.i_filename) + 1;		// 
 	bufsize += strlen(dmreq.URL) + 1;
 	bufsize += strlen(dmreq.path) + 1;
@@ -138,6 +151,22 @@ mk_reqbuf(struct dmreq dmreq, char **reqbuf, char op)
 	
 	memcpy(*reqbuf + i, &(dmreq.T_secs), sizeof(dmreq.T_secs));
 	i += sizeof(dmreq.T_secs);
+
+	memcpy(*reqbuf + i, &(dmreq.chksum_type), sizeof(dmreq.chksum_type));
+	i += sizeof(dmreq.chksum_type);
+
+	switch(dmreq.chksum_type) {
+	case SHA1_CHKSUM:
+		memcpy(*reqbuf + i, &(dmreq.chksum.sha1sum), SHA_DIGEST_LENGTH);
+		i += SHA_DIGEST_LENGTH;
+		break;
+	case MD5_CHKSUM:
+		memcpy(*reqbuf + i, &(dmreq.chksum.md5sum), MD5_DIGEST_LENGTH);
+		i += MD5_DIGEST_LENGTH;
+		break;
+	default:
+		break;
+	}
 	
 	memcpy(*reqbuf + i, &(dmreq.flags), sizeof(dmreq.flags));
 	i += sizeof(dmreq.flags);

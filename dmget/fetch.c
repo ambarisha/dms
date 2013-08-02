@@ -88,6 +88,9 @@ static pid_t	 pgrp;		/*        our process group */
 static long	 w_secs;	/*    -w: retry delay */
 static int	 family = PF_UNSPEC;	/* -[46]: address family to use */
 
+static int	 chksum_type = NO_CHKSUM;	/* (SHA1/MD5/NO)_CHKSUM */
+static char	 chksum[MAX_CHKSUM_LEN];
+
 static int	 sigint;	/* SIGINT received */
 
 static long	 ftp_timeout = TIMEOUT;	/* default timeout for FTP transfers */
@@ -264,6 +267,19 @@ fetch(char *URL, const char *path)
 	if (i_flag) dmreq.i_filename = i_filename;
 	else dmreq.i_filename = "";
 
+	dmreq.chksum_type = chksum_type;
+	switch(chksum_type) {
+	case SHA1_CHKSUM:
+		memcpy(dmreq.chksum.sha1sum, chksum, SHA_DIGEST_LENGTH);
+		break;
+	case MD5_CHKSUM:
+		memcpy(dmreq.chksum.md5sum, chksum, MD5_DIGEST_LENGTH);
+		break;
+	default:
+		dmreq.chksum_type = NO_CHKSUM;
+		break;
+	}
+
 	dmreq.flags = 0;
 	if (A_flag) dmreq.flags |= A_FLAG;
 	if (F_flag) dmreq.flags |= F_FLAG;
@@ -285,6 +301,37 @@ fetch(char *URL, const char *path)
 }
 
 static void
+checksum(char *fn)
+{
+	FILE *f;
+	int ret, clen, i;
+	char	csumstr[MAX_CHKSUM_LEN * 2];
+	
+	f = fopen(fn, "r");
+	ret = fread(csumstr, MAX_CHKSUM_LEN, 1, f);
+	if (ret == SHA_DIGEST_LENGTH * 2) {
+		chksum_type = SHA1_CHKSUM;
+		clen = SHA_DIGEST_LENGTH;
+	} else if (ret == MD5_DIGEST_LENGTH * 2) {
+		chksum_type = MD5_CHKSUM;
+		clen = MD5_DIGEST_LENGTH;
+	} else {
+		goto error;
+	}
+
+	for (i = 0; i < clen; i++) {
+		if (sscanf(csumstr + (2 * i), "%2X", chksum + i) != 1)
+			goto error;
+	}
+
+	return;
+
+error:
+	chksum_type = NO_CHKSUM;
+	return;
+}
+
+static void
 usage(void)
 {
 	fprintf(stderr, "%s\n%s\n%s\n%s\n",
@@ -293,7 +340,6 @@ usage(void)
 "       fetch [-146AadFlMmnPpqRrsUv] [-B bytes] [-N file] [-o file] [-S bytes]",
 "       [-T seconds] [-w seconds] [-i file] -h host -f file [-c dir]");
 }
-
 
 /*
  * Entry point
@@ -308,7 +354,7 @@ main(int argc, char *argv[])
 	int c, e, r;
 
 	while ((c = getopt(argc, argv,
-	    "146AaB:bc:dFf:Hh:i:lMmN:nPpo:qRrS:sT:tUvw:")) != -1)
+	    "146AaB:bc:C:dFf:Hh:i:lMmN:nPpo:qRrS:sT:tUvw:")) != -1)
 		switch (c) {
 		case '1':
 			once_flag = 1;
@@ -336,6 +382,9 @@ main(int argc, char *argv[])
 			break;
 		case 'c':
 			c_dirname = optarg;
+			break;
+		case 'C':
+			checksum(optarg);
 			break;
 		case 'd':
 			d_flag = 1;

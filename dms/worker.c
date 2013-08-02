@@ -666,7 +666,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 	return (r);
 }
 
-FILE *
+static FILE *
 dmXGet(struct dmjob *dmjob, struct url_stat *us) 
 {
 	char flags[8];
@@ -676,12 +676,7 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	struct dmreq *dmreq = dmjob->request;
 
 	/* populate tmpjob */
-
-	/* TODO : Modify stat_* to udpate jobs of progress,
-	 * right now we just put the msgs on stderr
-	 * */
 	tmpjob.client = STDERR_FILENO;
-
 	tmpjob.request = &tmpreq;
 	tmpreq.v_level = dmreq->v_level;
  	tmpreq.ftp_timeout = dmjob->request->ftp_timeout;
@@ -763,6 +758,52 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	free(tmpreq.path);
 	
 	return f;
+}
+
+static int
+validate_and_copy(struct dmjob *dmjob, FILE *f, struct url_stat us)
+{
+	int ret, ret2;
+	SHA_CTX sha_ctx;
+	MD5_CTX md5_ctx;
+	char buf[1024], chksum[SHA_DIGEST_LENGTH]; /* TODO: MAX DIGEST LENGTH */
+
+	switch(dmjob->request->chksum_type) {
+	case SHA1_CHKSUM:
+		SHA1_Init(&sha_ctx);
+
+		fseek(f, 0, SEEK_SET);
+		while ((ret = fread(buf, 1, 1024, f)) != 0)
+			SHA1_Update(&sha_ctx, buf, ret);
+		SHA1_Final(chksum, &sha_ctx);
+		
+		if (memcmp(chksum, dmjob->request->chksum.sha1sum,
+				SHA_DIGEST_LENGTH) != 0) {
+			fprintf(stderr, "dms: checksum missmatch\n");
+			/* Notify the client of the same */
+			return -1;
+		}
+		break;
+	case MD5_CHKSUM:
+		MD5_Init(&md5_ctx);
+
+		fseek(f, 0, SEEK_SET);
+		while ((ret = fread(buf, 1, 1024, f)) != 0)
+			MD5_Update(&md5_ctx, buf, ret);
+		MD5_Final(chksum, &md5_ctx);
+
+		if (memcmp(chksum, dmjob->request->chksum.md5sum,
+				MD5_DIGEST_LENGTH) != 0) {
+			fprintf(stderr, "dms: checksum mismatch\n");
+			return -1;
+		}
+		break;
+	default:
+		break;
+	}
+
+	fseek(f, 0, SEEK_SET);
+	return fetch(dmjob, f, us);	
 }
 
 /* TODO: This handler isn't registered as SIGUSR1 interrupts the download
@@ -892,8 +933,7 @@ run_worker(struct dmjob *dmjob)
 		if (f == NULL) {
 			ret = -1;
 		} else {
-			fseek(f, 0, SEEK_SET);
-			ret = fetch(dmjob, f, us);
+			ret = validate_and_copy(dmjob, f, us);		
 		}
 
 		report.status = ret;

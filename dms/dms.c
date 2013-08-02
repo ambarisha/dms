@@ -170,7 +170,23 @@ mk_dmreq(char *rcvbuf, int bufsize)
 	
 	memcpy(&(dmreq->T_secs), rcvbuf + i, sizeof(dmreq->T_secs));
 	i += sizeof(dmreq->T_secs);
-	
+
+	memcpy(&(dmreq->chksum_type), rcvbuf + i, sizeof(dmreq->chksum_type));
+	i += sizeof(dmreq->chksum_type);
+
+	switch(dmreq->chksum_type) {
+	case SHA1_CHKSUM:
+		memcpy(dmreq->chksum.sha1sum, rcvbuf + i, SHA_DIGEST_LENGTH);
+		i += SHA_DIGEST_LENGTH;
+		break;
+	case MD5_CHKSUM:
+		memcpy(dmreq->chksum.md5sum, rcvbuf + i, MD5_DIGEST_LENGTH);
+		i += MD5_DIGEST_LENGTH;
+		break;
+	case NO_CHKSUM:
+		break;
+	}
+
 	memcpy(&(dmreq->flags), rcvbuf + i, sizeof(dmreq->flags));
 	i += sizeof(dmreq->flags);
 

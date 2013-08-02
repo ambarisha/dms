@@ -6,9 +6,17 @@
 
 #include <stdio.h>
 #include <fetch.h>
+#include <openssl/sha.h>
+#include <openssl/md5.h>
 
 /* TODO : Fix the path, make sure the perms on it are good */
 #define DMS_UDS_PATH	"/tmp/dms.uds"
+
+#define	NO_CHKSUM	0
+#define SHA1_CHKSUM	1
+#define	MD5_CHKSUM	2
+
+#define	MAX_CHKSUM_LEN	SHA_DIGEST_LENGTH /* TODO: Any better alternative? */
 
 struct dmres {
 	int	 status;
@@ -24,8 +32,16 @@ struct dmreq {
 	off_t	 B_size;
 	off_t	 S_size;
 	long	 T_secs;
-	long	 flags;
+	int	 sha1;
+	char	 sha1sum[SHA_DIGEST_LENGTH];
 
+	int	 chksum_type;
+	union {
+		char	sha1sum[SHA_DIGEST_LENGTH];
+		char	md5sum[MD5_DIGEST_LENGTH];
+	} chksum;
+
+	long	 flags;
 #define		A_FLAG		(1 << 0)
 #define		F_FLAG		(1 << 1)
 #define		O_STDOUT	(1 << 2)
