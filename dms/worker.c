@@ -180,6 +180,9 @@ stat_start(struct xferstat *xs, const char *name, off_t size,
 	xs->offset = offset;
 	xs->rcvd = offset;
 	xs->lastrcvd = offset;
+	
+	update_mirror(dmjob->mirror , xs);
+
 	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0)
 		stat_send(xs, 1);
 	else if (dmjob->request->v_level > 0)
@@ -190,6 +193,7 @@ static void
 stat_end(struct xferstat *xs, struct dmjob *dmjob)
 {
 	gettimeofday(&xs->last, NULL);
+	update_mirror(dmjob->mirror , xs);
 	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0) {
 		stat_send(xs, 2);
 		putc('\n', stderr);
@@ -203,6 +207,7 @@ static void
 stat_update(struct xferstat *xs, off_t rcvd, struct dmjob *dmjob)
 {
 	xs->rcvd = rcvd;
+	update_mirror(dmjob->mirror , xs);
 	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0)
 		stat_send(xs, 0);
 }
@@ -228,10 +233,15 @@ mk_url(struct dmjob *dmjob, char *flags)
 		fprintf(stderr, "warning: mk_url: URL empty\n");
 		goto failure;
 	}
+
 	if ((dmjob->url = fetchParseURL(dmreq->URL)) == NULL) {
 		warnx("%s: parse error", dmreq->URL);
 		goto failure;
 	}
+
+	/* Replace host name with the mirror name */
+	dmjob->mirror = get_mirror();
+	strcpy(dmjob->url->host, dmjob->mirror->name);
 
 	/* if no scheme was specified, take a guess */
 	if (!*(dmjob->url->scheme)) {
@@ -732,6 +742,7 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 		goto success;
 	}
 	*/
+
 	tmpreq.path = (char *) malloc(strlen(dmreq->path) + strlen(TMP_EXT));
 	if (tmpreq.path == NULL) {
 		fprintf(stderr, "dmXGet: Insufficient memory\n");

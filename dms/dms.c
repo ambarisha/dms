@@ -18,8 +18,12 @@ static int	dm_err;
 static char	dm_errstr[512];
 
 int	 	 	 stop;
+
 struct dmjob		*jobs;
-pthread_mutex_t	 job_queue_mutex;
+pthread_mutex_t	 	 job_queue_mutex;
+
+extern struct dmmirr		*mirrors;
+extern pthread_mutex_t		 mirror_list_mutex;
 
 void *run_worker(struct dmjob *job);
 
@@ -114,6 +118,8 @@ rm_job(struct dmjob *head, struct dmjob *job)
 static struct dmjob *
 mk_dmjob(struct dmreq *dmreq, int client)
 {
+	int ret;
+	struct dmmirr *cur;
 	struct dmjob *dmjob = (struct dmjob *) malloc(sizeof(struct dmjob));
 	if (dmjob == NULL) {
 		fprintf(stderr, "mk_dmjob: malloc: insufficient memory\n");
@@ -128,6 +134,7 @@ mk_dmjob(struct dmreq *dmreq, int client)
 		return NULL;
 	}
 
+	dmjob->mirror = get_mirror();
 	dmjob->client = client;
 	dmjob->sigint = 0;
 	dmjob->sigalrm = 0;
@@ -187,6 +194,7 @@ mk_dmreq(char *rcvbuf, int bufsize)
 		break;
 	}
 
+	
 	memcpy(&(dmreq->flags), rcvbuf + i, sizeof(dmreq->flags));
 	i += sizeof(dmreq->flags);
 
@@ -326,7 +334,7 @@ sigint_handler(int sig)
 	exit(1); // Temporary
 }
 
-static state_t
+static int
 service_job(struct dmjob *job, fd_set *fdset)
 {
 	int ret = 0;
@@ -334,19 +342,22 @@ service_job(struct dmjob *job, fd_set *fdset)
 		/* TODO: Worker can't handle this signal yet */
 		//pthread_kill(job->worker, SIGUSR1);
 	}
-	return (job->state);
+
+	return ret;
 }
 
 static void
 run_event_loop(int socket)
 {
 	int i, ret, maxfd = socket;
-	state_t state;
 	struct dmjob *cur;
 	void *retptr;
+	fd_set fdset;
+
 	jobs = NULL;
 	job_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
-	fd_set fdset;
+	mirrors = NULL;
+	mirror_list_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 	signal(SIGINT, sigint_handler);
 	while (!stop) {
@@ -398,8 +409,8 @@ run_event_loop(int socket)
 
 		cur = jobs;
 		while (cur != NULL) {
-			state = service_job(cur, &fdset);
-			if (state == DONE) {
+			ret = service_job(cur, &fdset);
+			if (ret > 0) {
 				close(cur->client);
 				jobs = rm_job(jobs, cur);
 				rm_dmjob(&cur);

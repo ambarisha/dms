@@ -3,20 +3,29 @@
 
 #include <sys/types.h>
 
-typedef enum {RUNNING=0, DONE, DUPLICATE} state_t;
+#define MAX_LISTEN_QUEUE	5
+#define MINBUFSIZE		4096
+#define MAX_SAMPLES		256
 
 struct dmjob {
 	int		 ofd;
 	int	 	 client;
-	state_t	 	 state;
 	int		 sigint;
 	int	 	 sigalrm;
 	int	 	 siginfo;
 	int	 	 siginfo_en;
 	unsigned	 timeout;
+
+	enum {
+		RUNNING = 0,
+		DONE,
+		DUPLICATE
+	} state;
+
 	pthread_t	 worker;
 	struct dmreq 	*request;
 	struct url	*url;
+	struct dmmirr	*mirror;
 
 	struct dmjob 	*next;
 	struct dmjob	*prev;
@@ -28,9 +37,23 @@ struct dmrep {
 	char 	*errstr;
 };
 
-#define DEBUG			1
+struct dmmirr {
+	char		name[512];
+	int		index;
 
-#define MAX_LISTEN_QUEUE	5
-#define MINBUFSIZE		4096
+	enum {
+		NOT_TRIED = 0,
+		FAILED
+	} remark;
+
+	struct timeval	timestamps[MAX_SAMPLES];
+	double		samples[MAX_SAMPLES];
+	int		nconns;
+
+	struct dmmirr 	*next;
+	struct dmmirr	*prev;
+};
+
+#define DEBUG			1
 
 #endif
