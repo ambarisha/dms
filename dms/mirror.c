@@ -9,6 +9,10 @@
 struct dmmirr		*mirrors;
 pthread_mutex_t	 	 mirror_list_mutex;
 
+static const char *MIRROR_LIST[] = {
+	"ftp.freebsd.org",
+};
+
 static struct dmmirr *
 add_mirror(struct dmmirr *head, struct dmmirr *new)
 { 
@@ -115,6 +119,24 @@ write_mirror(struct dmmirr *mirror, FILE *f)
 	return;
 }
 
+static int
+init_mirrors_file(void)
+{
+	int i;
+	FILE *f = fopen(MIRRORS_FILE, "w");
+	if (f == NULL)
+		return -1;
+	
+	for(i = 0; i < sizeof(MIRRORS_LIST); i++) {
+		fwrite(MIRRORS_LIST[i], strlen(MIRRORS_LIST[i], 1, f);
+		fprintf(f, "\nNOT_TRIED\n");
+		for (j = 0; j < MAX_SAMPLES; j++)
+			fprintf("0\t0\n");
+	}
+
+	fclose(f);
+}
+
 int
 load_mirrors(void)
 {
@@ -122,6 +144,14 @@ load_mirrors(void)
 	struct dmmirr *mirror;
 
 	FILE *f = fopen(MIRRORS_FILE, "r");
+	if (f == NULL && errno == ENOENT) {
+		init_mirror_file();
+		f = fopen(MIRRORS_FILE, "r");
+	} else if (f == NULL) {
+		fprintf(stderr, "load_mirrors: fopen(%s) failed\n",
+				MIRRORS_FILE);
+		return -1;
+	}
 
 	/* Profile list lock */
 	ret = pthread_mutex_lock(&mirror_list_mutex);
