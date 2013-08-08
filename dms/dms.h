@@ -43,6 +43,7 @@ struct dmmirr {
 
 	enum {
 		NOT_TRIED = 0,
+		ACTIVE,
 		FAILED
 	} remark;
 

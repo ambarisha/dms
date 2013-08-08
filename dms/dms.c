@@ -300,7 +300,6 @@ handle_request(int csock)
 		if (ret == -1) {
 			fprintf(stderr, "handle_request: Couldn't release "
 					"job queue lock\n");
-
 			goto error;
 		}
 		/* Job queue lock released */
@@ -330,6 +329,7 @@ done:
 void
 sigint_handler(int sig)
 {
+	save_mirrors();
 	stop = 1;
 	exit(1); // Temporary
 }
@@ -358,6 +358,7 @@ run_event_loop(int socket)
 	job_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 	mirrors = NULL;
 	mirror_list_mutex = PTHREAD_MUTEX_INITIALIZER;
+	load_mirrors();
 
 	signal(SIGINT, sigint_handler);
 	while (!stop) {

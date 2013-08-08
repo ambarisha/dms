@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <sys/time.h>
 #include "dm.h"
 #include "dms.h"
@@ -10,7 +11,7 @@ struct dmmirr		*mirrors;
 pthread_mutex_t	 	 mirror_list_mutex;
 
 static const char *MIRROR_LIST[] = {
-	"ftp.freebsd.org",
+	"ftp.freebsd.org"
 };
 
 static struct dmmirr *
@@ -56,7 +57,7 @@ read_mirror(FILE *f)
 {
 	int i;
 	struct dmmirr *mirror;
-	char buf[64];
+	char buf[512], rem[64];
 
 	mirror = (struct dmmirr *) malloc(sizeof(struct dmmirr));
 	if (mirror == NULL) {
@@ -64,9 +65,25 @@ read_mirror(FILE *f)
 		return NULL;
 	}
 
-	if (fgets(mirror->name, 512, f) == NULL) {
+	if (fgets(buf, 512, f) == NULL) {
 		free(mirror);
 		return NULL;
+	}
+	sscanf(buf, "%s\n", mirror->name);
+
+	if (fgets(buf, 64, f) == NULL) {
+		fprintf(stderr, "WARNING: read_mirror: mirrors.list file corrupted\n");
+		free(mirror);
+		return NULL;
+	}
+	sscanf(buf, "%s\n", rem);
+
+	if (strcmp(rem, "NOT_TRIED") == 0) {
+		mirror->remark = NOT_TRIED;
+	} else if (strcmp(rem, "FAILED") == 0) {
+		mirror->remark = FAILED;
+	} else {
+		fprintf(stderr, "WARNING: Unknown mirror state in mirrors.list\n");
 	}
 
 	if (fgets(buf, 64, f) == NULL) {
@@ -74,16 +91,7 @@ read_mirror(FILE *f)
 		free(mirror);
 		return NULL;
 	}
-
-	if (strcmp(buf, "NOT_TRIED") == 0) {
-		mirror->remark = NOT_TRIED;
-	} else if (strcmp(buf, "FAILED") == 0) {
-		mirror->remark = FAILED;
-	} else {
-
-	}
-
-	fscanf(f, "%d\n", &mirror->index);
+	sscanf(buf, "%d\n", &mirror->index);
 
 	for(i = 0; i < MAX_SAMPLES; i++) {
 		fscanf(f, "%ld\t%f\n", &(mirror->timestamps[i].tv_sec),
@@ -122,16 +130,16 @@ write_mirror(struct dmmirr *mirror, FILE *f)
 static int
 init_mirrors_file(void)
 {
-	int i;
+	int i, j;
 	FILE *f = fopen(MIRRORS_FILE, "w");
 	if (f == NULL)
 		return -1;
 	
-	for(i = 0; i < sizeof(MIRRORS_LIST); i++) {
-		fwrite(MIRRORS_LIST[i], strlen(MIRRORS_LIST[i], 1, f);
+	for(i = 0; i < sizeof(MIRROR_LIST) / sizeof(MIRROR_LIST[0]); i++) {
+		fwrite(MIRROR_LIST[i], strlen(MIRROR_LIST[i]), 1, f);
 		fprintf(f, "\nNOT_TRIED\n");
 		for (j = 0; j < MAX_SAMPLES; j++)
-			fprintf("0\t0\n");
+			fprintf(f, "0\t0\n");
 	}
 
 	fclose(f);
@@ -145,7 +153,7 @@ load_mirrors(void)
 
 	FILE *f = fopen(MIRRORS_FILE, "r");
 	if (f == NULL && errno == ENOENT) {
-		init_mirror_file();
+		init_mirrors_file();
 		f = fopen(MIRRORS_FILE, "r");
 	} else if (f == NULL) {
 		fprintf(stderr, "load_mirrors: fopen(%s) failed\n",
@@ -163,7 +171,7 @@ load_mirrors(void)
 
 	mirror = read_mirror(f);
 	while(mirror != NULL) {
-		add_mirror(mirrors, mirror);
+		mirrors = add_mirror(mirrors, mirror);
 		mirror = read_mirror(f);
 	}
 
@@ -197,7 +205,7 @@ save_mirrors(void)
 
 	while(mirror != NULL) {
 		write_mirror(mirror, f);	
-		mirror = rm_mirror(mirrors, mirror);
+		mirrors = rm_mirror(mirrors, mirror);
 	}
 
 	ret = pthread_mutex_unlock(&mirror_list_mutex);
@@ -228,6 +236,7 @@ update_mirror(struct dmmirr *dmmirr, struct xferstat *xs)
 	dmmirr->index = (dmmirr->index + 1) % MAX_SAMPLES;
 	dmmirr->timestamps[dmmirr->index] = tv;
 	dmmirr->samples[dmmirr->index] = speed;
+	dmmirr->remark = ACTIVE;
 }
 
 struct dmmirr *
@@ -261,9 +270,9 @@ get_mirror(void)
 
 		if (cur->remark == FAILED)
 			goto next;
-
 		if (cur->nconns > MAX_CONNS)
 			goto next;
+
 
 		i = cur->index;
 		cnt = 0;

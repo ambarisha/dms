@@ -212,6 +212,15 @@ stat_update(struct xferstat *xs, off_t rcvd, struct dmjob *dmjob)
 		stat_send(xs, 0);
 }
 
+static void
+select_mirror(struct dmjob *dmjob)
+{
+	dmjob->mirror = get_mirror();
+	strcpy(dmjob->url->host, dmjob->mirror->name);
+	strcpy(dmjob->request->URL, dmjob->mirror->name);
+	strcat(dmjob->request->URL, dmjob->url->doc);
+}
+
 static int
 mk_url(struct dmjob *dmjob, char *flags)
 {
@@ -240,10 +249,8 @@ mk_url(struct dmjob *dmjob, char *flags)
 	}
 
 	/* Replace host name with the mirror name */
-	dmjob->mirror = get_mirror();
-	strcpy(dmjob->url->host, dmjob->mirror->name);
+	select_mirror(dmjob);
 
-	/* if no scheme was specified, take a guess */
 	if (!*(dmjob->url->scheme)) {
 		if (!*(dmjob->url->host))
 			strcpy(dmjob->url->scheme, SCHEME_FILE);
