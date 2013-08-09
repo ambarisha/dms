@@ -423,6 +423,7 @@ dmget(struct dmreq dmreq)
 				rm_dmres(&dmres);
 				goto success;
 			} else {
+				fprintf(stderr, "dmget: download failed: %s\n", dmres->errstr);
 				rm_dmres(&dmres);
 				goto failure;
 			}
@@ -456,6 +457,7 @@ signal:
 	ret = -1;
 	goto done;
 failure:
+	remove(dmreq.path);
 	ret = 1;
 	goto done;
 success:

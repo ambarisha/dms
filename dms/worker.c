@@ -753,10 +753,7 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	tmpreq.path = (char *) malloc(strlen(dmreq->path) + strlen(TMP_EXT));
 	if (tmpreq.path == NULL) {
 		fprintf(stderr, "dmXGet: Insufficient memory\n");
-		free(tmpreq.i_filename);
-		free(tmpreq.path);
-		free(tmpreq.URL);
-		return NULL;
+		goto done;
 	}
 	strcpy(tmpreq.path, dmreq->path);
 	strcat(tmpreq.path, TMP_EXT);
@@ -764,11 +761,19 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	tmpjob.ofd = open(tmpreq.path, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 
 	FILE *f = fetchXGet(tmpjob.url, us, flags);
+	if (f == NULL) {
+		close(tmpjob.ofd);
+		remove(tmpreq.path);
+		fprintf(stderr, "dmXGet: Couldn't fetch remote file\n");//, fetchLastErrStr);
+		goto done;
+	}
+
 	fetch(&tmpjob, f, *us);
 	fclose(f);
 
 	f = fopen(tmpreq.path, "r");
 
+done:
 	free(tmpjob.url->doc);
 	free(tmpjob.url);
 	free(tmpreq.i_filename);

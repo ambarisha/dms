@@ -203,7 +203,7 @@ save_mirrors(void)
 		return -1;
 	}
 
-	while(mirror != NULL) {
+	while(mirrors != NULL) {
 		write_mirror(mirror, f);	
 		mirrors = rm_mirror(mirrors, mirror);
 	}
