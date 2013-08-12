@@ -1,5 +1,6 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/select.h>
 
 #include <stdint.h>
 #include <err.h>
@@ -316,6 +317,50 @@ success:
 }
 
 static int
+check_signal(int signum, struct dmjob *dmjob)
+{
+	struct timeval tv;
+	struct dmmsg *msg;
+	int *sig, ret;		
+	fd_set fds;
+	
+	if (signum == SIGINT && dmjob->sigint != 0)
+		return 1;
+	if (signal == SIGINFO && dmjob->siginfo != 0)
+		return 1;
+	if (signal == SIGALRM && dmjob->sigalrm != 0)
+		return 1;
+
+	do {
+	FD_ZERO(&fds);
+	FD_SET(dmjob->client, &fds);
+
+	tv.tv_sec = 0;
+	tv.tv_usec = 0;
+
+	ret = select(&fds, NULL, NULL, NULL, &tv);
+	msg = recv_dmmsg(dmjob->client);
+		sig = msg->buf;	
+		if (*sig == SIGINT)
+			dmjob->sigint = 1;
+		else if (*sig == SIGINFO)
+			dmjob->siginfo = 1;
+		else if (*sig == SIGALRM) {
+			dmjob->sigalrm = 1;
+		}
+	} while (ret == 1);
+	
+	if (signum == SIGINT && dmjob->sigint != 0)
+		return dmjob->sigint;
+	if (signal == SIGINFO && dmjob->siginfo != 0)
+		return dmjob->siginfo;
+	if (signal == SIGALRM && dmjob->sigalrm != 0)
+		return dmjob->sigalrm;
+
+	return 0;
+}
+
+static int
 fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 {
 	struct stat sb, nsb;
@@ -393,12 +438,9 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 	if (dmjob->timeout)
 		alarm(dmjob->timeout);
 
-	if (dmjob->sigalrm || dmjob->sigint)
+	if (check_signal(SIGALRM, dmjob) || check_signal(SIGINT, dmjob))
 		goto signal;
 	
-	if (dmjob->sigint)
-		goto signal;
-
 	/* check that size is as expected */
 	/*if (dmreq->S_size) {
 		if (us.size == -1) {
@@ -511,7 +553,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 			 * from scratch if we want the whole file
 			 */
 			dmjob->url->offset = 0;
-			if (dmjob->sigint)
+			if (check_signal(SIGINT, dmjob))
 				goto signal;
 		}
 
@@ -555,13 +597,13 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 
 	/* suck in the data */
 	dmjob->siginfo_en = 1;
-	while (!dmjob->sigint) {
+	while (!check_signal(SIGINT, dmjob)) {
 		if (us.size != -1 && us.size - count < dmreq->B_size &&
 		    us.size - count >= 0)
 			size = us.size - count;
 		else
 			size = dmreq->B_size;
-		if (dmjob->siginfo) {
+		if (check_signal(SIGINFO, dmjob)) {
 			stat_end(&xs, dmjob);
 			dmjob->siginfo = 0;
 		}
@@ -570,7 +612,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 			break;
 
 		if ((readcnt = fread(buf, 1, size, f)) < size) {
-			if (ferror(f) && errno == EINTR && !dmjob->sigint)
+			if (ferror(f) && errno == EINTR && !check_signal(SIGINT, dmjob))
 				clearerr(f);
 			else if (readcnt == 0) {
 				break;
@@ -581,7 +623,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 		stat_update(&xs, count += readcnt, dmjob);
 		for (ptr = buf; readcnt > 0; ptr += wr, readcnt -= wr)
 			if ((wr = fwrite(ptr, 1, readcnt, of)) < readcnt) {
-				if (ferror(of) && errno == EINTR && !dmjob->sigint)
+				if (ferror(of) && errno == EINTR && !check_signal(SIGINT, dmjob))
 					clearerr(of);
 				else
 					break;
@@ -590,7 +632,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 			break;
 	}
 
-	if (!dmjob->sigalrm)
+	if (!check_signal(SIGALRM, dmjob))
 		dmjob->sigalrm = ferror(f) && errno == ETIMEDOUT;
 	dmjob->siginfo_en = 0;
 
@@ -616,9 +658,9 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 	}
 
 	/* timed out or interrupted? */
-	if (dmjob->sigalrm)
+	if (check_signal(SIGALRM, dmjob))
 		warnx("transfer timed out");
-	if (dmjob->sigint) {
+	if (check_signal(SIGINT, dmjob)) {
 		warnx("transfer interrupted");
 		goto failure;
 	}
@@ -627,7 +669,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 	if (f == NULL)
 		goto failure;
 
-	if (!dmjob->sigalrm) {
+	if (!check_signal(SIGALRM, dmjob)) {
 		/* check the status of our files */
 		if (ferror(f))
 			warn("%s", dmreq->URL);
@@ -648,7 +690,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 	 * If the transfer timed out and we didn't know how much to
 	 * expect, assume the worst (i.e. we didn't get all of it)
 	 */
-	if (dmjob->sigalrm && us.size == -1) {
+	if (check_signal(SIGALRM, dmjob) && us.size == -1) {
 		warnx("%s may be truncated", dmreq->path);
 		goto failure_keep;
 	}
@@ -827,36 +869,6 @@ validate_and_copy(struct dmjob *dmjob, FILE *f, struct url_stat us)
 
 	fseek(f, 0, SEEK_SET);
 	return fetch(dmjob, f, us);	
-}
-
-/* TODO: This handler isn't registered as SIGUSR1 interrupts the download
- * 	 Figure out a proper way to handle this
- * */
-void
-sig_handler(int sig)
-{
-	struct dmjob *tmp = jobs;
-	struct dmmsg *msg;
-	int *clisig;
-	pthread_t tid = pthread_self();
-	if (sig == SIGUSR1) {
-		/* TODO: Umm...Locking? */
-		while (tmp != NULL) {
-			if (pthread_equal(tid, tmp->worker) != 0)
-				break;
-			tmp = tmp->next;
-		}
-
-		msg = recv_dmmsg(tmp->client);
-		clisig = msg->buf;	
-		if (*clisig == SIGINT)
-			tmp->sigint = 1;
-		else if (*clisig == SIGINFO)
-			tmp->siginfo = 1;
-		else if (*clisig == SIGALRM) {
-			tmp->sigalrm = 1;
-		}
-	}
 }
 
 int 
