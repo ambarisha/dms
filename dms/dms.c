@@ -349,97 +349,31 @@ service_job(struct dmjob *job, fd_set *fdset)
 static void
 run_event_loop(int socket)
 {
-	int i, ret, maxfd = socket;
+	int ret, csock;
+	struct sockaddr_un cliaddr;
+	size_t cliaddrlen;
 	struct dmjob *cur;
 	void *retptr;
-	fd_set fdset;
 
 	jobs = NULL;
 	job_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 	mirrors = NULL;
 	mirror_list_mutex = PTHREAD_MUTEX_INITIALIZER;
 	load_mirrors();
 
 	signal(SIGINT, sigint_handler);
 	while (!stop) {
-
-		/* Prepare fdset and make select call */
-		FD_ZERO(&fdset);
-		maxfd = socket;
-		FD_SET(socket, &fdset);
-
-		/* Acquire job queue lock */
-		ret = pthread_mutex_lock(&job_queue_mutex);
-		if (ret == -1) {
-			fprintf(stderr, "handle_request: Attempt to acquire"
-					" job queue mutex failed\n");
-			return -1;
-		}
-
-		cur = jobs;
-		while (cur != NULL) {
-			FD_SET(cur->client, &fdset);
-			if (cur->client > maxfd)
-				maxfd = cur->client;
-			cur = cur->next;
-		}
-
-		ret = pthread_mutex_unlock(&job_queue_mutex);
-		if (ret == -1) {
-			fprintf(stderr, "handle_request: Couldn't release "
-					"job queue lock\n");
-
-			return -1;
-		}
-		/* Job queue lock released */
-
-		ret = select(maxfd + 1, &fdset, NULL, NULL, NULL);
-		if (ret ==  -1) {
+		cliaddrlen = sizeof(cliaddr);
+		csock = accept(socket, (struct sockaddr *) &cliaddr,
+				&cliaddrlen);
+		if (csock == -1) {
 			fprintf(stderr, "run_event_loop: "
-					"select: %s\n", strerror(errno));
+				"select: %s\n", strerror(errno));
 			goto wrap_up;
 		}
 
-		/* Acquire job queue lock */
-		ret = pthread_mutex_lock(&job_queue_mutex);
-		if (ret == -1) {
-			fprintf(stderr, "handle_request: Attempt to acquire"
-					" job queue mutex failed\n");
-			return -1;
-		}
-
-		cur = jobs;
-		while (cur != NULL) {
-			ret = service_job(cur, &fdset);
-			if (ret > 0) {
-				close(cur->client);
-				jobs = rm_job(jobs, cur);
-				rm_dmjob(&cur);
-			}
-			cur = cur->next;
-		}
-
-		ret = pthread_mutex_unlock(&job_queue_mutex);
-		if (ret == -1) {
-			fprintf(stderr, "handle_request: Couldn't release "
-					"job queue lock\n");
-
-			return -1;
-		}
-		/* Job queue lock released */
-
-		if (FD_ISSET(socket, &fdset)) {
-			struct sockaddr_un cliaddr;
-			size_t cliaddrlen = sizeof(cliaddr);
-			int csock = accept(socket, (struct sockaddr *) &cliaddr,
-					&cliaddrlen);
-			if (csock == -1) {
-				fprintf(stderr, "run_event_loop: "
-					"select: %s\n", strerror(errno));
-				goto wrap_up;
-			}
-			handle_request(csock);
-		}
+		handle_request(csock);
 	}
 
 wrap_up:
