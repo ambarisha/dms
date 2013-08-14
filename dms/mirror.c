@@ -1,14 +1,18 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
 #include <errno.h>
 #include <sys/time.h>
+
 #include "dm.h"
 #include "dms.h"
+#include "mirror.h"
 
 #define 	MAX_SAMPLES	256
 #define		MAX_CONNS	5
 #define		MIRRORS_FILE	"mirrors.list"
-
-struct dmmirr		*mirrors;
-pthread_mutex_t	 	 mirror_list_mutex;
 
 static const char *MIRROR_LIST[] = {
 	"ftp.freebsd.org"

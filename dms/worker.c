@@ -3,6 +3,8 @@
 #include <sys/select.h>
 
 #include <stdint.h>
+#include <stdlib.h>
+#include <pthread.h>
 #include <err.h>
 #include <string.h>
 #include <errno.h>
@@ -12,13 +14,17 @@
 
 #include "dms.h"
 #include "dm.h"
+#include "mirror.h"
 
+#define	TMP_EXT		".tmp"
 
 static const char 	*prefixes = " kMGTP";
 extern struct dmjob 	*jobs;
 extern pthread_mutex_t	 job_queue_mutex;
 
-#define	TMP_EXT		".tmp"
+extern struct dmmsg *recv_dmmsg(int);
+extern void free_dmmsg(struct dmmsg **);
+extern int send_dmmsg(int, struct dmmsg);
 
 static int
 authenticate(struct url *url)
@@ -326,35 +332,35 @@ check_signal(int signum, struct dmjob *dmjob)
 	
 	if (signum == SIGINT && dmjob->sigint != 0)
 		return 1;
-	if (signal == SIGINFO && dmjob->siginfo != 0)
+	if (signum == SIGINFO && dmjob->siginfo != 0)
 		return 1;
-	if (signal == SIGALRM && dmjob->sigalrm != 0)
+	if (signum == SIGALRM && dmjob->sigalrm != 0)
 		return 1;
 
 	do {
-	FD_ZERO(&fds);
-	FD_SET(dmjob->client, &fds);
+		FD_ZERO(&fds);
+		FD_SET(dmjob->client, &fds);
 
-	tv.tv_sec = 0;
-	tv.tv_usec = 0;
+		tv.tv_sec = 0;
+		tv.tv_usec = 0;
 
-	ret = select(&fds, NULL, NULL, NULL, &tv);
-	msg = recv_dmmsg(dmjob->client);
-		sig = msg->buf;	
+		ret = select(dmjob->client + 1, &fds, NULL, NULL, &tv);
+		msg = recv_dmmsg(dmjob->client);
+		sig = (int *)msg->buf;	
 		if (*sig == SIGINT)
 			dmjob->sigint = 1;
 		else if (*sig == SIGINFO)
 			dmjob->siginfo = 1;
-		else if (*sig == SIGALRM) {
+		else if (*sig == SIGALRM)
 			dmjob->sigalrm = 1;
-		}
+	
 	} while (ret == 1);
 	
 	if (signum == SIGINT && dmjob->sigint != 0)
 		return dmjob->sigint;
-	if (signal == SIGINFO && dmjob->siginfo != 0)
+	if (signum == SIGINFO && dmjob->siginfo != 0)
 		return dmjob->siginfo;
-	if (signal == SIGALRM && dmjob->sigalrm != 0)
+	if (signum == SIGALRM && dmjob->sigalrm != 0)
 		return dmjob->sigalrm;
 
 	return 0;
@@ -920,7 +926,7 @@ run_worker(struct dmjob *dmjob)
 	if (ret == -1) {
 		fprintf(stderr, "handle_request: Attempt to acquire"
 				" job queue mutex failed\n");
-		return -1;
+		return NULL;
 	}
 
 	tmp = jobs;
@@ -938,7 +944,7 @@ run_worker(struct dmjob *dmjob)
 		fprintf(stderr, "handle_request: Couldn't release "
 				"job queue lock\n");
 
-		return -1;
+		return NULL;
 	}
 	/* Job queue lock released */
 
@@ -954,7 +960,7 @@ run_worker(struct dmjob *dmjob)
 	if (ret == -1) {
 		fprintf(stderr, "handle_request: Attempt to acquire"
 				" job queue mutex failed\n");
-		return -1;
+		return NULL;
 	}
 
 	/* Serve any outstanding requests from the local tmp file */
@@ -984,8 +990,7 @@ run_worker(struct dmjob *dmjob)
 	if (ret == -1) {
 		fprintf(stderr, "handle_request: Couldn't release "
 				"job queue lock\n");
-
-		return -1;
+		return NULL;
 	}
 	/* Job queue lock released */
 

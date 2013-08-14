@@ -10,22 +10,27 @@
 #include <err.h>
 #include <fetch.h>
 #include <pthread.h>
+#include <signal.h>
 
 #include "dm.h"
 #include "dms.h"
+#include "mirror.h"
 
 static int	dm_err;
 static char	dm_errstr[512];
 
 int	 	 	 stop;
-
 struct dmjob		*jobs;
 pthread_mutex_t	 	 job_queue_mutex;
 
 extern struct dmmirr		*mirrors;
 extern pthread_mutex_t		 mirror_list_mutex;
 
-void *run_worker(struct dmjob *job);
+extern struct dmmsg *recv_dmmsg(int);
+extern void free_dmmsg(struct dmmsg **);
+
+extern void *run_worker(void *);
+extern int send_report(int, struct dmrep);
 
 static int
 read_fd(int sock)
@@ -383,7 +388,7 @@ wrap_up:
 	if (ret == -1) {
 		fprintf(stderr, "handle_request: Attempt to acquire"
 				" job queue mutex failed\n");
-		return -1;
+		return;
 	}
 
 	cur = jobs;
@@ -401,7 +406,7 @@ wrap_up:
 		fprintf(stderr, "handle_request: Couldn't release "
 				"job queue lock\n");
 
-		return -1;
+		return;
 	}
 	/* Job queue lock released */
 
