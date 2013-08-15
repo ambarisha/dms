@@ -1,12 +1,14 @@
-#include <sys/socket.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
 #include <errno.h>
+
+#include <sys/socket.h>
 
 #include "dm.h"
 
 /* Utils for handling messages */
-
-extern char *dm_errstr;
 
 int
 send_dmmsg(int socket, struct dmmsg msg)
@@ -50,7 +52,7 @@ recv_dmmsg(int sock)
 	struct dmmsg *msg = (struct dmmsg *) malloc(sizeof(struct dmmsg));
 	if (msg == NULL) {
 		fprintf(stderr, "send_dmmsg: malloc: insufficient memory\n");
-		return -1;
+		return NULL;
 	}
 	
 	err = read(sock, &bufsize, sizeof(bufsize));
@@ -68,7 +70,7 @@ recv_dmmsg(int sock)
 
 	err = read(sock, &(msg->op), sizeof(msg->op));
 	if (err == 0) {
-		fprintf(stderr,stderr, "recv_dmmsg: remote end"
+		fprintf(stderr, "recv_dmmsg: remote end"
 					" closed connection\n");
 		goto error;
 	} else if (err == -1) {
@@ -89,7 +91,7 @@ recv_dmmsg(int sock)
 	err = read(sock, msg->buf, bufsize);
 	if (err == 0) {
 		msg->len = 0;
-		fprintf(stderr,stderr, "recv_dmmsg: remote end"
+		fprintf(stderr,"recv_dmmsg: remote end"
 					" closed connection\n");
 		free(msg->buf);
 		free(msg);

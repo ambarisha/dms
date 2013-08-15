@@ -17,7 +17,7 @@ struct dmauth {
 	char 	*scheme;
 	char	*host;
 	char	 user[AUTH_USERLEN+1];
-	char	 pwd[AUTH_PWDLEN+1]
+	char	 pwd[AUTH_PWDLEN+1];
 };
 
 extern int		 dmLastErrCode;

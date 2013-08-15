@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
-
+#include <signal.h>
 
 #include "dm.h"
 #include "dmget.h"
@@ -26,6 +26,10 @@ static int 	 siginfo;
 
 static int 	 dmg_error;
 static char	 dmg_errstr[512];
+
+extern struct dmmsg *recv_dmmsg(int);
+extern void free_dmmsg(struct dmmsg **);
+extern int send_dmmsg(int, struct dmmsg);
 
 void dmSigHandler(int signal)
 {
@@ -222,12 +226,12 @@ rm_dmres(struct dmres **dmres)
 }
 
 static int
-send_signal(int sock)
+send_signal(int sock, int sig)
 {
 	struct dmmsg msg;
 	msg.op = DMSIG;
-	msg.buf = &signal;
-	msg.len = sizeof(signal);
+	msg.buf = (char *)&sig;
+	msg.len = sizeof(sig);
 	return (send_dmmsg(sock, msg));
 }
 
@@ -409,8 +413,13 @@ dmget(struct dmreq dmreq)
 			goto failure;
 		}
 
-		if (sigint || siginfo) {
-			send_signal(sock);
+		if (sigint) {
+			send_signal(sock, SIGINT);
+			goto signal;
+		}
+
+		if (siginfo) {
+			send_signal(sock, SIGINFO);
 			goto signal;
 		}
 		

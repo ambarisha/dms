@@ -261,7 +261,7 @@ fetch(char *URL, const char *path)
 	dmreq.B_size = B_size;
 	dmreq.S_size = S_size;
 	dmreq.URL = URL;
-	dmreq.path = path;
+	dmreq.path = (char *)path;
 	dmreq.T_secs = T_secs;
 
 	if (i_flag) dmreq.i_filename = i_filename;
