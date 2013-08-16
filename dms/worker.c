@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "dms.h"
+#include "utils.h"
 #include "dm.h"
 #include "mirror.h"
 
@@ -21,10 +22,6 @@
 static const char 	*prefixes = " kMGTP";
 extern struct dmjob 	*jobs;
 extern pthread_mutex_t	 job_queue_mutex;
-
-extern struct dmmsg *recv_dmmsg(int);
-extern void free_dmmsg(struct dmmsg **);
-extern int send_dmmsg(int, struct dmmsg);
 
 static int
 authenticate(struct url *url)

@@ -14,6 +14,7 @@
 
 #include "dm.h"
 #include "dms.h"
+#include "utils.h"
 #include "mirror.h"
 
 static int	dm_err;
@@ -25,9 +26,6 @@ pthread_mutex_t	 	 job_queue_mutex;
 
 extern struct dmmirr		*mirrors;
 extern pthread_mutex_t		 mirror_list_mutex;
-
-extern struct dmmsg *recv_dmmsg(int);
-extern void free_dmmsg(struct dmmsg **);
 
 extern void *run_worker(void *);
 extern int send_report(int, struct dmrep);

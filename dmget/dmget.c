@@ -12,6 +12,7 @@
 
 #include "dm.h"
 #include "dmget.h"
+#include "utils.h"
 
 dm_auth_t	 dmAuthMethod;
 stat_display_t	 dmStatDisplayMethod;
@@ -26,10 +27,6 @@ static int 	 siginfo;
 
 static int 	 dmg_error;
 static char	 dmg_errstr[512];
-
-extern struct dmmsg *recv_dmmsg(int);
-extern void free_dmmsg(struct dmmsg **);
-extern int send_dmmsg(int, struct dmmsg);
 
 void dmSigHandler(int signal)
 {
