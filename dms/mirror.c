@@ -103,6 +103,7 @@ read_mirror(FILE *f)
 		/* TODO: What if fscanf fails? */
 	}
 
+	mirror->nconns = 0;
 	return mirror;
 }
 
@@ -168,7 +169,7 @@ load_mirrors(void)
 	/* Profile list lock */
 	ret = pthread_mutex_lock(&mirror_list_mutex);
 	if (ret == -1) {
-		fprintf(stderr, "get_mirror: Attempt to acquire"
+		fprintf(stderr, "load_mirrors: Attempt to acquire"
 				" profile list mutex failed\n");
 		return -1;
 	}
@@ -181,7 +182,7 @@ load_mirrors(void)
 
 	ret = pthread_mutex_unlock(&mirror_list_mutex);
 	if (ret == -1) {
-		fprintf(stderr, "get_mirror: Couldn't release "
+		fprintf(stderr, "load_mirrors: Couldn't release "
 				"profile list lock\n");
 		return -1;
 	}
@@ -202,7 +203,7 @@ save_mirrors(void)
 	/* Profile list lock */
 	ret = pthread_mutex_lock(&mirror_list_mutex);
 	if (ret == -1) {
-		fprintf(stderr, "get_mirror: Attempt to acquire"
+		fprintf(stderr, "save_mirrors: Attempt to acquire"
 				" profile list mutex failed\n");
 		return -1;
 	}
@@ -214,7 +215,7 @@ save_mirrors(void)
 
 	ret = pthread_mutex_unlock(&mirror_list_mutex);
 	if (ret == -1) {
-		fprintf(stderr, "get_mirror: Couldn't release "
+		fprintf(stderr, "save_mirrors: Couldn't release "
 				"profile list lock\n");
 		return -1;
 	}
@@ -229,6 +230,7 @@ update_mirror(struct dmmirr *dmmirr, struct xferstat *xs)
 {
 	struct timeval tv;
 	double speed;
+	int ret;
 
 	gettimeofday(&tv, NULL);
 	if (tv.tv_sec - dmmirr->timestamps[dmmirr->index].tv_sec < 60)
@@ -236,11 +238,54 @@ update_mirror(struct dmmirr *dmmirr, struct xferstat *xs)
 
 	speed = get_speed(xs);
 
+	/* Profile list lock */
+	ret = pthread_mutex_lock(&mirror_list_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "update_mirror: Attempt to acquire"
+				" profile list mutex failed\n");
+		return;
+	}
+
 	/* TODO: This assumes that workers and sites have 1-1 correspondence */
 	dmmirr->index = (dmmirr->index + 1) % MAX_SAMPLES;
 	dmmirr->timestamps[dmmirr->index] = tv;
 	dmmirr->samples[dmmirr->index] = speed;
 	dmmirr->remark = ACTIVE;
+
+	ret = pthread_mutex_unlock(&mirror_list_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "update_mirror: Couldn't release "
+				"profile list lock\n");
+		return;
+	}
+	/* Profile list lock released */
+}
+
+double
+get_average_speed(struct dmmirr *dmmirr)
+{
+	int i, cnt;
+	double average;
+	struct timeval now;
+	long week_sec;
+
+	week_sec = 7 * 24 * 60 * 60;
+
+	i = dmmirr->index;
+	cnt = 0;
+	average = 0.0;
+
+	do {
+		gettimeofday(&now, NULL);
+		if (dmmirr->timestamps[i].tv_sec <  now.tv_sec - week_sec)
+			break;
+		average = (average * cnt + dmmirr->samples[i]) / (cnt + 1);
+		cnt++;
+
+		i = (i - 1) % MAX_SAMPLES;
+	} while (i != dmmirr->index);
+
+	return average;
 }
 
 struct dmmirr *
@@ -249,11 +294,7 @@ get_mirror(void)
 	struct dmmirr *cur, *tmp;
 	double tmpmax = -1.0;
 	int cnt, ret, i;
-	struct timeval now;
-	long week_sec;
 	double average;
-
-	week_sec = 7 * 24 * 60 * 60;
 
 	/* Profile list lock */
 	ret = pthread_mutex_lock(&mirror_list_mutex);
@@ -277,19 +318,7 @@ get_mirror(void)
 		if (cur->nconns > MAX_CONNS)
 			goto next;
 
-
-		i = cur->index;
-		cnt = 0;
-		average = 0.0;
-		do {
-			gettimeofday(&now, NULL);
-			if (cur->timestamps[i].tv_sec <  now.tv_sec - week_sec)
-				break;
-			average = (average * cnt + cur->samples[i]) / (cnt + 1);
-			cnt++;
-
-			i = (i - 1) % MAX_SAMPLES;
-		} while (i != cur->index);
+		average = get_average_speed(cur);
 
 		if (average > tmpmax) {
 			tmpmax = average;
@@ -298,10 +327,10 @@ get_mirror(void)
 next:
 		cur = cur->next;
 	}
-
 	/* TODO: If we couldn't pick up a mirror? */
 
 success:
+	tmp->nconns++;
 	ret = pthread_mutex_unlock(&mirror_list_mutex);
 	if (ret == -1) {
 		fprintf(stderr, "get_mirror: Couldn't release "
@@ -309,6 +338,32 @@ success:
 		return NULL;
 	}
 	/* Profile list lock released */
-	
+
 	return tmp;
+}
+
+int
+release_mirror(struct dmmirr *dmmirr)
+{
+	int ret;
+
+	/* Profile list lock */
+	ret = pthread_mutex_lock(&mirror_list_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "update_mirror: Attempt to acquire"
+				" profile list mutex failed\n");
+		return -1;
+	}
+
+	dmmirr->nconns--;
+
+	ret = pthread_mutex_unlock(&mirror_list_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "update_mirror: Couldn't release "
+				"profile list lock\n");
+		return -1;
+	}
+	/* Profile list lock released */
+
+	return 0;
 }

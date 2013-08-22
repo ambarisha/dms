@@ -144,6 +144,7 @@ mk_dmjob(struct dmreq *dmreq, int client)
 	dmjob->siginfo = 0;
 	dmjob->siginfo_en = 0;
 	dmjob->state = RUNNING;
+	dmjob->preempted = 0;
 	dmjob->url = NULL;
 	return dmjob;
 }

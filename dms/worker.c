@@ -92,6 +92,24 @@ compare_jobs(struct dmjob *j1, struct dmjob *j2)
 	return strcmp(j1->request->URL, j2->request->URL);
 }
 
+static long
+get_eta(struct dmjob *dmjob, struct dmmirr *dmmirr)
+{
+	long eta, elapsed, speed, received, expected;
+	if (dmmirr == dmjob->mirror) {
+		elapsed = dmjob->oldstat.last.tv_sec - dmjob->oldstat.start.tv_sec;
+		received = dmjob->oldstat.rcvd - dmjob->oldstat.offset;
+		expected = dmjob->oldstat.size - dmjob->oldstat.rcvd;
+		eta = (long)((double) elapsed * expected / received);
+	} else {
+		expected = dmjob->oldstat.size;
+		speed = get_average_speed(dmmirr);
+		eta = (long)((double) expected / speed);
+	}
+
+	return eta;
+}
+
 static void
 stat_send(struct xferstat *xs, int force)
 {
@@ -177,6 +195,15 @@ static void
 stat_start(struct xferstat *xs, const char *name, off_t size,
 	off_t offset, struct dmjob *dmjob)
 {
+	/* If there is no absolute progress because of a premption,
+	 * do nothing. Otherwise update status incase there's a 
+	 * preemption later
+	 */
+
+	if (dmjob->preempted != 0 &&
+		dmjob->oldstat.rcvd > xs->rcvd)
+			return;
+
 	snprintf(xs->name, sizeof xs->name, "%s", name);
 	gettimeofday(&xs->start, NULL);
 	xs->last.tv_sec = xs->last.tv_usec = 0;
@@ -185,7 +212,8 @@ stat_start(struct xferstat *xs, const char *name, off_t size,
 	xs->rcvd = offset;
 	xs->lastrcvd = offset;
 	
-	update_mirror(dmjob->mirror , xs);
+	update_mirror(dmjob->mirror, xs);
+	dmjob->oldstat = *xs;
 
 	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0)
 		stat_send(xs, 1);
@@ -196,6 +224,16 @@ stat_start(struct xferstat *xs, const char *name, off_t size,
 static void
 stat_end(struct xferstat *xs, struct dmjob *dmjob)
 {
+	/* If there is no absolute progress because of a premption,
+	 * do nothing. Otherwise update status incase there's a 
+	 * preemption later
+	 */
+
+	if (dmjob->preempted != 0 &&
+		dmjob->oldstat.rcvd > xs->rcvd)
+			return;
+	dmjob->oldstat = *xs;
+
 	gettimeofday(&xs->last, NULL);
 	update_mirror(dmjob->mirror , xs);
 	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0) {
@@ -210,7 +248,18 @@ stat_end(struct xferstat *xs, struct dmjob *dmjob)
 static void
 stat_update(struct xferstat *xs, off_t rcvd, struct dmjob *dmjob)
 {
+	/* If there is no absolute progress because of a premption,
+	 * do nothing. Otherwise update status incase there's a 
+	 * preemption later
+	 */
+
+	if (dmjob->preempted != 0 &&
+		dmjob->oldstat.rcvd > xs->rcvd)
+			return;
+
 	xs->rcvd = rcvd;
+	dmjob->oldstat = *xs;
+
 	update_mirror(dmjob->mirror , xs);
 	if ((dmjob->request->flags & V_TTY) && dmjob->request->v_level > 0)
 		stat_send(xs, 0);
@@ -231,6 +280,9 @@ mk_url(struct dmjob *dmjob, char *flags)
 	struct dmreq *dmreq = dmjob->request;
 	struct stat sb;
 	int r;
+	
+	/* Init flags */
+	*flags = '\0'; 
 
 	if (dmjob->url != NULL)
 		return 0;
@@ -317,6 +369,46 @@ failure:
 	r = -1;
 success:
 	return (r);
+}
+
+static struct dmjob *
+find_potential_job(struct dmmirr *dmmirr)
+{
+	int ret;
+	long cureta, neweta;
+	struct dmjob *tmp;
+
+	/* Acquire job queue lock */
+	ret = pthread_mutex_lock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Attempt to acquire"
+				" job queue mutex failed\n");
+		return NULL;
+	}
+
+	tmp = jobs;
+	while (tmp != NULL) {
+		cureta = get_eta(tmp, tmp->mirror);
+		neweta = get_eta(tmp, dmmirr);
+	
+		if (neweta < cureta) {
+			/* notify the current owner worker to let go */
+			tmp->preempted = 1;
+			break;
+		}
+
+		tmp = tmp->next;
+	}
+
+	ret = pthread_mutex_unlock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "handle_request: Couldn't release "
+				"job queue lock\n");
+		return NULL;
+	}
+	/* Job queue lock released */
+
+	return tmp;
 }
 
 static int
@@ -926,6 +1018,7 @@ run_worker(struct dmjob *dmjob)
 		return NULL;
 	}
 
+	/* check if this is a duplicate */
 	tmp = jobs;
 	while (tmp != NULL) {
 		if (tmp != dmjob && compare_jobs(tmp, dmjob) == 0) {
@@ -940,12 +1033,11 @@ run_worker(struct dmjob *dmjob)
 	if (ret == -1) {
 		fprintf(stderr, "handle_request: Couldn't release "
 				"job queue lock\n");
-
 		return NULL;
 	}
 	/* Job queue lock released */
 
-	/* check if this is a duplicate */
+start:
 	ret = mk_url(dmjob, flags);	
 	dmjob->worker = pthread_self();
 
@@ -968,11 +1060,10 @@ run_worker(struct dmjob *dmjob)
 			continue;
 		}
 
-		if (f == NULL) {
+		if (f == NULL)
 			ret = -1;
-		} else {
+		else
 			ret = validate_and_copy(dmjob, f, us);		
-		}
 
 		report.status = ret;
 		report.errcode = fetchLastErrCode;
@@ -993,14 +1084,22 @@ run_worker(struct dmjob *dmjob)
 
 	/* remove the local tmp file */
 	if (f != NULL) {
-		tmppath = (char *) malloc(strlen(dmjob->request->path) + strlen(TMP_EXT));
+		tmppath = (char *) malloc(strlen(dmjob->request->path) +
+					strlen(TMP_EXT));
 		strcpy(tmppath, dmjob->request->path);
 		strcat(tmppath, TMP_EXT);
 
 		remove(tmppath);
 		free(tmppath);
 	}
+
+
+	/* Check if this worker can prempt any downloads */
+	dmjob = find_potential_job(dmjob->mirror);	
+	if (dmjob != NULL)
+		goto start;
 	
+	release_mirror(dmjob->mirror);
 	/* TODO : What is this? Yew!! */
 	sleep(10);
 }

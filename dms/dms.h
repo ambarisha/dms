@@ -7,6 +7,8 @@
 #define MINBUFSIZE		4096
 #define MAX_SAMPLES		256
 
+#include "dm.h"
+
 struct dmjob {
 	int		 ofd;
 	int	 	 client;
@@ -15,6 +17,7 @@ struct dmjob {
 	int	 	 siginfo;
 	int	 	 siginfo_en;
 	unsigned	 timeout;
+	int		 preempted;
 
 	enum {
 		RUNNING = 0,
@@ -26,6 +29,7 @@ struct dmjob {
 	struct dmreq 	*request;
 	struct url	*url;
 	struct dmmirr	*mirror;
+	struct xferstat	 oldstat;
 
 	struct dmjob 	*next;
 	struct dmjob	*prev;
