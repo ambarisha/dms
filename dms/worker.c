@@ -371,6 +371,28 @@ success:
 	return (r);
 }
 
+static char *
+get_tmpfn(const char *fn)
+{
+	/* TODO: Not good assumes type of opaque pthread_t type
+	 *       Fix this by having a pthread_t -> id mapping
+	 */
+	unsigned int tid = (unsigned long)pthread_self();
+	char idstr[8];
+	sprintf(idstr, ".%u", tid);
+
+	char *tmpfn = (char *) malloc(strlen(fn) + strlen(idstr) + strlen(TMP_EXT) + 1);
+	if (tmpfn == NULL) {
+		fprintf(stderr, "dms: Insufficient memory\n");
+		return NULL;
+	}
+
+	strcpy(tmpfn, fn);
+	strcat(tmpfn, idstr);
+	strcat(tmpfn, TMP_EXT);
+	return tmpfn;
+}
+
 static struct dmjob *
 find_potential_job(struct dmmirr *dmmirr)
 {
@@ -887,13 +909,9 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	}
 	*/
 
-	tmpreq.path = (char *) malloc(strlen(dmreq->path) + strlen(TMP_EXT));
-	if (tmpreq.path == NULL) {
-		fprintf(stderr, "dmXGet: Insufficient memory\n");
+	tmpreq.path = get_tmpfn(dmreq->path);
+	if (tmpreq.path == NULL)
 		goto done;
-	}
-	strcpy(tmpreq.path, dmreq->path);
-	strcat(tmpreq.path, TMP_EXT);
 
 	tmpjob.ofd = open(tmpreq.path, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 
@@ -1008,7 +1026,7 @@ run_worker(struct dmjob *dmjob)
 	int ret;
 	FILE *f;
 	char *tmppath;
-	char flags[8];
+	char flags[8], tid[8];
 
 	/* Acquire job queue lock */
 	ret = pthread_mutex_lock(&job_queue_mutex);
@@ -1084,13 +1102,11 @@ start:
 
 	/* remove the local tmp file */
 	if (f != NULL) {
-		tmppath = (char *) malloc(strlen(dmjob->request->path) +
-					strlen(TMP_EXT));
-		strcpy(tmppath, dmjob->request->path);
-		strcat(tmppath, TMP_EXT);
-
-		remove(tmppath);
-		free(tmppath);
+		tmppath = get_tmpfn(dmjob->request->path);
+		if (tmppath != NULL) {
+			remove(tmppath);
+			free(tmppath);
+		}
 	}
 
 
