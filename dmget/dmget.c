@@ -22,8 +22,8 @@ int		 dmDebug;
 int		 dmLastErrCode;
 char		 dmLastErrString[MAXERRSTRING];
 
-static int 	 sigint;
-static int 	 siginfo;
+static volatile sig_atomic_t 	 sigint;
+static volatile sig_atomic_t 	 siginfo;
 
 static int 	 dmg_error;
 static char	 dmg_errstr[512];

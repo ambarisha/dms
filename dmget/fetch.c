@@ -91,7 +91,7 @@ static int	 family = PF_UNSPEC;	/* -[46]: address family to use */
 static int	 chksum_type = NO_CHKSUM;	/* (SHA1/MD5/NO)_CHKSUM */
 static char	 chksum[MAX_CHKSUM_LEN];
 
-static int	 sigint;	/* SIGINT received */
+static volatile sig_atomic_t	 sigint;	/* SIGINT received */
 
 static long	 ftp_timeout = TIMEOUT;	/* default timeout for FTP transfers */
 static long	 http_timeout = TIMEOUT;/* default timeout for HTTP transfers */

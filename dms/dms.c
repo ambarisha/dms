@@ -20,7 +20,7 @@
 static int	dm_err;
 static char	dm_errstr[512];
 
-int	 	 	 stop;
+volatile sig_atomic_t 	 stop;
 struct dmjob		*jobs;
 pthread_mutex_t	 	 job_queue_mutex;
 
