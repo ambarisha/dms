@@ -492,6 +492,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 	char *ptr;
 	char *buf;
 	struct dmreq *dmreq = dmjob->request;
+	pthread_t tid = pthread_self();
 
 	of = NULL;
 	tmppath = NULL;
@@ -557,6 +558,9 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 
 	if (check_signal(SIGALRM, dmjob) || check_signal(SIGINT, dmjob))
 		goto signal;
+
+	if (dmjob->preempted && dmjob->worker != tid)
+		goto preempted;
 	
 	/* check that size is as expected */
 	/*if (dmreq->S_size) {
@@ -672,6 +676,9 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 			dmjob->url->offset = 0;
 			if (check_signal(SIGINT, dmjob))
 				goto signal;
+
+			if (dmjob->preempted && dmjob->worker != tid)
+				goto preempted;
 		}
 
 
@@ -714,7 +721,8 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 
 	/* suck in the data */
 	dmjob->siginfo_en = 1;
-	while (!check_signal(SIGINT, dmjob)) {
+	while (!check_signal(SIGINT, dmjob) &&
+		(dmjob->preempted == 0 || dmjob->worker == tid)) {
 		if (us.size != -1 && us.size - count < dmreq->B_size &&
 		    us.size - count >= 0)
 			size = us.size - count;
@@ -725,11 +733,15 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 			dmjob->siginfo = 0;
 		}
 
+		if (dmjob->preempted && dmjob->worker != tid)
+			goto preempted;
+
 		if (size == 0)
 			break;
 
 		if ((readcnt = fread(buf, 1, size, f)) < size) {
-			if (ferror(f) && errno == EINTR && !check_signal(SIGINT, dmjob))
+			if (ferror(f) && errno == EINTR && !check_signal(SIGINT, dmjob) &&
+				(dmjob->preempted == 0 || dmjob->worker == tid))
 				clearerr(f);
 			else if (readcnt == 0) {
 				break;
@@ -753,7 +765,15 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 		dmjob->sigalrm = ferror(f) && errno == ETIMEDOUT;
 	dmjob->siginfo_en = 0;
 
+	if (dmjob->preempted && dmjob->worker != tid)
+		goto preempted;
+
+
 	stat_end(&xs, dmjob);
+
+preempted:
+	r = -1;
+	goto done;
 
 	/*
 	 * If the transfer timed out or was interrupted, we still want to
@@ -923,11 +943,14 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 		goto done;
 	}
 
-	fetch(&tmpjob, f, *us);
+	ret = fetch(&tmpjob, f, *us);
+	if (ret == -1) {
+		f = NULL;
+		goto done;
+	}
+
 	fclose(f);
-
 	f = fopen(tmpreq.path, "r");
-
 done:
 	free(tmpjob.url->doc);
 	free(tmpjob.url);
@@ -1061,6 +1084,8 @@ start:
 
 	/* fetch the remote file into a local tmp file */
 	f = dmXGet(dmjob, &us);
+	if (f == NULL && dmjob->preempted && dmjob->worker != pthread_self())
+		return NULL;
 
 	/* Acquire job queue lock */
 	ret = pthread_mutex_lock(&job_queue_mutex);
