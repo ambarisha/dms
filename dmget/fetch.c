@@ -49,6 +49,7 @@ __FBSDID("$FreeBSD$");
 
 #include "dmget.h"
 #include "dm.h"
+#include "dmsumm.h"
 
 #define MINBUFSIZE	4096
 #define TIMEOUT		120
@@ -354,7 +355,7 @@ main(int argc, char *argv[])
 	int c, e, r;
 
 	while ((c = getopt(argc, argv,
-	    "146AaB:bc:C:dFf:Hh:i:lMmN:nPpo:qRrS:sT:tUvw:")) != -1)
+	    "146AaB:bc:C:dFf:Hh:i:lMmN:nPpo:qRrS:sT:tUvw:X")) != -1)
 		switch (c) {
 		case '1':
 			once_flag = 1;
@@ -471,6 +472,9 @@ main(int argc, char *argv[])
 			if (*optarg == '\0' || *end != '\0')
 				errx(1, "invalid delay (%s)", optarg);
 			break;
+		case 'X':
+			dump_status_summary(fdopen(STDOUT_FILENO, "w"));
+			exit(0);
 		default:
 			usage();
 			exit(1);

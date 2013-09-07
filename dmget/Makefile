@@ -2,7 +2,7 @@
 
 .include <bsd.own.mk>
 
-SRCS=		fetch.c utils.c dmget.c
+SRCS=		fetch.c utils.c dmget.c dmsumm.c
 PROG=		dmget
 CSTD?=		c99
 .if ${MK_OPENSSL} != "no"
