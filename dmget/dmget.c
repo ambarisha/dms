@@ -281,7 +281,6 @@ send_request(int sock, struct dmreq dmreq)
 
 	ret = sigsafe_write(sock, reqbuf, bufsize);
 	free(reqbuf);
-
 	if (ret == -1)
 		return -1;
 
@@ -406,9 +405,8 @@ dmget(struct dmreq dmreq)
 	while (!sigint) {
 		struct dmmsg *msg;
 		msg = recv_dmmsg(sock);				
-		if (msg == NULL) {
+		if (msg == NULL) 
 			goto failure;
-		}
 
 		if (sigint) {
 			send_signal(sock, SIGINT);

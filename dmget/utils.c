@@ -13,10 +13,12 @@
 int
 send_dmmsg(int socket, struct dmmsg msg)
 {
+	printf("IN DMMSG\n");
 	int bufsize = sizeof(bufsize);	// Buffer size
 	bufsize += 1; 			// Op
 	bufsize += msg.len;		// Signal number
 
+	printf("About to send message\n");
 	char *sndbuf = (char *) malloc(bufsize);
 	if (sndbuf == NULL) {
 		fprintf(stderr, "send_dmmsg: malloc: insufficient memory\n");
@@ -30,10 +32,14 @@ send_dmmsg(int socket, struct dmmsg msg)
 	*(sndbuf + i) = msg.op;
 	i++;
 
-	memcpy(sndbuf + i, msg.buf, msg.len);
-	i += msg.len;
+	if (msg.len != 0) {
+		memcpy(sndbuf + i, msg.buf, msg.len);
+		i += msg.len;
+	}
 
 	int nbytes = write(socket, sndbuf, bufsize);
+	perror("send_dmmsg write");
+	printf("%d bytes sent\n", nbytes);
 	free(sndbuf);
 	
 	if (nbytes == -1) {
@@ -79,6 +85,13 @@ recv_dmmsg(int sock)
 	}
 
 	bufsize -= sizeof(msg->op);
+	
+	/* This is to accommodate for 0 length messages */
+	if (bufsize == 0) {
+		msg->len = 0;
+		msg->buf = NULL;
+		return msg;
+	}
 
 	msg->buf = (char *) malloc(bufsize);
 	if (msg == NULL) {

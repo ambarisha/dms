@@ -18,13 +18,7 @@ struct dmjob {
 	int	 	 siginfo_en;
 	unsigned	 timeout;
 	int		 preempted;
-
-	enum {
-		RUNNING = 0,
-		DONE,
-		DUPLICATE
-	} state;
-
+	state_t		 state;
 	pthread_t	 worker;
 	struct dmreq 	*request;
 	struct url	*url;
@@ -42,7 +36,7 @@ struct dmrep {
 };
 
 struct dmmirr {
-	char		name[512];
+	char		name[256];
 	int		index;
 
 	enum {

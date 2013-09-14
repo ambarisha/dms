@@ -86,6 +86,8 @@ read_mirror(FILE *f)
 		mirror->remark = NOT_TRIED;
 	} else if (strcmp(rem, "FAILED") == 0) {
 		mirror->remark = FAILED;
+	} else if (strcmp(rem, "ACTIVE") == 0) {
+		mirror->remark = ACTIVE;
 	} else {
 		fprintf(stderr, "WARNING: Unknown mirror state in mirrors.list\n");
 	}
@@ -122,7 +124,12 @@ write_mirror(struct dmmirr *mirror, FILE *f)
 	case FAILED:
 		fputs("FAILED\n", f);
 		break;
+	case ACTIVE:
+		fputs("ACTIVE\n", f);
+		break;
 	}
+	
+	fprintf(f, "%u\n", mirror->index);
 
 	for(i = 0; i < MAX_SAMPLES; i++) {
 		fprintf(f, "%ld\t%f\n", mirror->timestamps[i].tv_sec,
@@ -143,6 +150,7 @@ init_mirrors_file(void)
 	for(i = 0; i < sizeof(MIRROR_LIST) / sizeof(MIRROR_LIST[0]); i++) {
 		fwrite(MIRROR_LIST[i], strlen(MIRROR_LIST[i]), 1, f);
 		fprintf(f, "\nNOT_TRIED\n");
+		fprintf(f, "0\n");
 		for (j = 0; j < MAX_SAMPLES; j++)
 			fprintf(f, "0\t0\n");
 	}

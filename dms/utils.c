@@ -30,8 +30,10 @@ send_dmmsg(int socket, struct dmmsg msg)
 	*(sndbuf + i) = msg.op;
 	i++;
 
-	memcpy(sndbuf + i, msg.buf, msg.len);
-	i += msg.len;
+	if (msg.len != 0) {
+		memcpy(sndbuf + i, msg.buf, msg.len);
+		i += msg.len;
+	}
 
 	int nbytes = write(socket, sndbuf, bufsize);
 	free(sndbuf);
@@ -79,6 +81,13 @@ recv_dmmsg(int sock)
 	}
 
 	bufsize -= sizeof(msg->op);
+	
+	/* This is to accommodate for 0 length messages */
+	if (bufsize == 0) {
+		msg->len = 0;
+		msg->buf = NULL;
+		return msg;
+	}
 
 	msg->buf = (char *) malloc(bufsize);
 	if (msg == NULL) {
@@ -117,4 +126,15 @@ free_dmmsg(struct dmmsg **msg)
 	free((*msg)->buf);
 	free(*msg);
 	*msg = NULL;
+}
+
+long
+get_eta(struct xferstat *xs)
+{
+	long eta, elapsed, speed, received, expected;
+	elapsed = xs->last.tv_sec - xs->start.tv_sec;
+	received = xs->rcvd - xs->offset;
+	expected = xs->size - xs->rcvd;
+	eta = (long)((double) elapsed * expected / received);
+	return eta;
 }

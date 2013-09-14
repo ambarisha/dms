@@ -18,3 +18,6 @@ recv_dmmsg(int sock);
 
 void
 free_dmmsg(struct dmmsg **msg);
+
+long
+get_eta(struct xferstat *xs);

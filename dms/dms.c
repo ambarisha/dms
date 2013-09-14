@@ -17,12 +17,14 @@
 #include "utils.h"
 #include "mirror.h"
 
-static int	dm_err;
-static char	dm_errstr[512];
+#define MAX_SUMMS	32
 
-volatile sig_atomic_t 	 stop;
-struct dmjob		*jobs;
-pthread_mutex_t	 	 job_queue_mutex;
+static int			 dm_err;
+static char			 dm_errstr[512];
+
+volatile sig_atomic_t 	 	 stop;
+struct dmjob			*jobs;
+pthread_mutex_t	 	 	 job_queue_mutex;
 
 extern struct dmmirr		*mirrors;
 extern pthread_mutex_t		 mirror_list_mutex;
@@ -103,7 +105,7 @@ add_job(struct dmjob *head, struct dmjob *new)
 	new->next = head;	
 }
 
-static struct dmjob *
+struct dmjob *
 rm_job(struct dmjob *head, struct dmjob *job)
 {
 	if (job->next != NULL) 
@@ -123,6 +125,7 @@ mk_dmjob(struct dmreq *dmreq, int client)
 {
 	int ret;
 	struct dmmirr *cur;
+
 	struct dmjob *dmjob = (struct dmjob *) malloc(sizeof(struct dmjob));
 	if (dmjob == NULL) {
 		fprintf(stderr, "mk_dmjob: malloc: insufficient memory\n");
@@ -241,7 +244,7 @@ mk_dmreq(char *rcvbuf, int bufsize)
 	return dmreq;
 }
 
-static void
+void
 rm_dmreq(struct dmreq **dmreq)
 {
 	if (*dmreq == NULL)
@@ -263,6 +266,50 @@ rm_dmjob(struct dmjob **dmjob)
 	free((*dmjob)->url);
 }
 
+static void
+send_job_summaries(int sock)
+{
+	struct dmsumm summs[MAX_SUMMS];
+	int i, ret;
+	struct dmmsg dmmsg;
+	struct dmjob *tmp = jobs;
+
+	/* Acquire job queue lock */
+	ret = pthread_mutex_lock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "send_job_summaries: Attempt to acquire"
+				" job queue mutex failed\n");
+		return;
+	}
+
+	for (i = 0; i < MAX_SUMMS; i++) {
+		void *temp = tmp->url->doc;
+		strncpy(summs[i].name, tmp->url->doc, sizeof(summs[i].name));
+		strncpy(summs[i].mirror, tmp->mirror->name,
+				sizeof(summs[i].name));
+
+		summs[i].state = tmp->state;
+		summs[i].size = tmp->oldstat.size;
+		summs[i].rcvd = tmp->oldstat.rcvd;
+		summs[i].eta = get_eta(&(tmp->oldstat));
+	}
+
+	ret = pthread_mutex_unlock(&job_queue_mutex);
+	if (ret == -1) {
+		fprintf(stderr, "send_job_summaries: Couldn't release "
+				"job queue lock\n");
+		return;
+	}
+	/* Job queue lock released */
+
+	dmmsg.op = DMDUMPRESP;
+	dmmsg.len = i * sizeof(struct dmsumm);
+	dmmsg.buf = (char *)summs;
+
+	send_dmmsg(sock, dmmsg);
+	return;
+}
+
 static int
 handle_request(int csock)
 {
@@ -272,6 +319,7 @@ handle_request(int csock)
 	struct dmrep	report;
 	int ret;
 	pid_t pid;
+
 
 	msg = recv_dmmsg(csock);
 	if (msg == NULL) {
@@ -311,6 +359,9 @@ handle_request(int csock)
 		pthread_create(&(dmjob->worker), NULL, run_worker, dmjob);
 		pthread_detach(dmjob->worker);
 		goto done;
+	case DMDUMPREQ:
+		send_job_summaries(csock);
+		goto done;
 	default:
 		free_dmmsg(&msg);
 		goto error;
@@ -326,6 +377,7 @@ error:
 	rm_dmjob(&dmjob);
 	ret = -1;	
 done:
+
 	free_dmmsg(&msg);
 	return ret;
 }
@@ -376,7 +428,6 @@ run_event_loop(int socket)
 				"select: %s\n", strerror(errno));
 			goto wrap_up;
 		}
-
 		handle_request(csock);
 	}
 
@@ -414,6 +465,7 @@ wrap_up:
 int main(int argc, char **argv)
 {
 	int sock, err; 
+
 	sock = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (sock == -1) {
 		fprintf(stderr, "main: socket: %s\n", strerror(errno));

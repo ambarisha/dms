@@ -18,6 +18,8 @@
 
 #define	MAX_CHKSUM_LEN	SHA_DIGEST_LENGTH /* TODO: Any better alternative? */
 
+typedef enum { RUNNING = 0, DONE, DUPLICATE } state_t;
+
 struct dmres {
 	int	 status;
 	int	 errcode;
@@ -68,6 +70,15 @@ struct dmmsg {
 	char 	*buf;
 };
 
+struct dmsumm {
+	char		name[64];
+	char		mirror[64];
+	state_t		state;
+	off_t		size;
+	off_t		rcvd;
+	long		eta;
+};
+
 struct xferstat {
 	char		 name[64];
 	struct timeval	 start;		/* start of transfer */
@@ -85,5 +96,7 @@ struct xferstat {
 #define		DMAUTHRESP		4
 #define		DMSIG			5
 #define		DMSTAT			6
+#define		DMDUMPREQ		7
+#define		DMDUMPRESP		8
 
 #endif /* _DMCLIENT_H */

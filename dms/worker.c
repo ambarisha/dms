@@ -93,20 +93,11 @@ compare_jobs(struct dmjob *j1, struct dmjob *j2)
 }
 
 static long
-get_eta(struct dmjob *dmjob, struct dmmirr *dmmirr)
+mirr_eta(off_t size, struct dmmirr *dmmirr)
 {
-	long eta, elapsed, speed, received, expected;
-	if (dmmirr == dmjob->mirror) {
-		elapsed = dmjob->oldstat.last.tv_sec - dmjob->oldstat.start.tv_sec;
-		received = dmjob->oldstat.rcvd - dmjob->oldstat.offset;
-		expected = dmjob->oldstat.size - dmjob->oldstat.rcvd;
-		eta = (long)((double) elapsed * expected / received);
-	} else {
-		expected = dmjob->oldstat.size;
-		speed = get_average_speed(dmmirr);
-		eta = (long)((double) expected / speed);
-	}
-
+	long expected, speed, eta;
+	speed = get_average_speed(dmmirr);
+	eta = (long)((double) size / speed);
 	return eta;
 }
 
@@ -377,8 +368,9 @@ get_tmpfn(const char *fn)
 	/* TODO: Not good assumes type of opaque pthread_t type
 	 *       Fix this by having a pthread_t -> id mapping
 	 */
-	unsigned int tid = (unsigned long)pthread_self();
-	char idstr[8];
+	unsigned int tid = (unsigned int)pthread_self();
+	char idstr[32];
+
 	sprintf(idstr, ".%u", tid);
 
 	char *tmpfn = (char *) malloc(strlen(fn) + strlen(idstr) + strlen(TMP_EXT) + 1);
@@ -410,11 +402,10 @@ find_potential_job(struct dmmirr *dmmirr)
 
 	tmp = jobs;
 	while (tmp != NULL) {
-		cureta = get_eta(tmp, tmp->mirror);
-		neweta = get_eta(tmp, dmmirr);
+		cureta = get_eta(&(tmp->oldstat));
+		neweta = mirr_eta(tmp->oldstat.size, dmmirr);
 	
 		if (neweta < cureta) {
-			/* notify the current owner worker to let go */
 			tmp->preempted = 1;
 			break;
 		}
@@ -456,6 +447,9 @@ check_signal(int signum, struct dmjob *dmjob)
 		tv.tv_usec = 0;
 
 		ret = select(dmjob->client + 1, &fds, NULL, NULL, &tv);
+		if (!FD_ISSET(dmjob->client, &fds))
+			break;
+
 		msg = recv_dmmsg(dmjob->client);
 		sig = (int *)msg->buf;	
 		if (*sig == SIGINT)
@@ -561,6 +555,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 
 	if (dmjob->preempted && dmjob->worker != tid)
 		goto preempted;
+	
 	
 	/* check that size is as expected */
 	/*if (dmreq->S_size) {
@@ -770,6 +765,7 @@ fetch(struct dmjob *dmjob, FILE *f, struct url_stat us)
 
 
 	stat_end(&xs, dmjob);
+	goto signal;
 
 preempted:
 	r = -1;
@@ -932,9 +928,9 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	tmpreq.path = get_tmpfn(dmreq->path);
 	if (tmpreq.path == NULL)
 		goto done;
-
+	
 	tmpjob.ofd = open(tmpreq.path, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-
+		
 	FILE *f = fetchXGet(tmpjob.url, us, flags);
 	if (f == NULL) {
 		close(tmpjob.ofd);
@@ -946,6 +942,7 @@ dmXGet(struct dmjob *dmjob, struct url_stat *us)
 	ret = fetch(&tmpjob, f, *us);
 	if (ret == -1) {
 		f = NULL;
+		fprintf(stderr, "Failed now\n");
 		goto done;
 	}
 
@@ -984,6 +981,7 @@ validate_and_copy(struct dmjob *dmjob, FILE *f, struct url_stat us)
 			/* Notify the client of the same */
 			return -1;
 		}
+
 		break;
 	case MD5_CHKSUM:
 		MD5_Init(&md5_ctx);
@@ -998,6 +996,7 @@ validate_and_copy(struct dmjob *dmjob, FILE *f, struct url_stat us)
 			fprintf(stderr, "dms: checksum mismatch\n");
 			return -1;
 		}
+
 		break;
 	default:
 		break;
@@ -1045,6 +1044,7 @@ run_worker(struct dmjob *dmjob)
 {
 	struct dmrep report;
 	struct dmjob *tmp;
+	struct dmmirr *dmmirr;
 	struct url_stat us;
 	int ret;
 	FILE *f;
@@ -1086,7 +1086,7 @@ start:
 	f = dmXGet(dmjob, &us);
 	if (f == NULL && dmjob->preempted && dmjob->worker != pthread_self())
 		return NULL;
-
+	
 	/* Acquire job queue lock */
 	ret = pthread_mutex_lock(&job_queue_mutex);
 	if (ret == -1) {
@@ -1094,6 +1094,7 @@ start:
 				" job queue mutex failed\n");
 		return NULL;
 	}
+
 
 	/* Serve any outstanding requests from the local tmp file */
 	tmp = jobs;
@@ -1129,18 +1130,24 @@ start:
 	if (f != NULL) {
 		tmppath = get_tmpfn(dmjob->request->path);
 		if (tmppath != NULL) {
-			remove(tmppath);
+//			remove(tmppath);
 			free(tmppath);
 		}
 	}
 
+	dmmirr = dmjob->mirror;
+	
+	rm_dmreq(&(dmjob->request));
+	jobs = rm_job(jobs, dmjob);
 
 	/* Check if this worker can prempt any downloads */
-	dmjob = find_potential_job(dmjob->mirror);	
-	if (dmjob != NULL)
+	tmp = find_potential_job(dmmirr);	
+	if (tmp != NULL) {
+		dmjob = tmp;
 		goto start;
-	
-	release_mirror(dmjob->mirror);
+	}
+
+	release_mirror(dmmirr);
 	/* TODO : What is this? Yew!! */
 	sleep(10);
 }
